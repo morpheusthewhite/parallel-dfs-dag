@@ -1,0 +1,104 @@
+Phase 0: file parsing
+
+File format
+-----------------
+7
+0: 2 4 5 #
+1: 2 4 5 6 #
+2: 3 5 4 6 #
+3: 5 #
+4: 6 5 #
+5: 6 #
+6: #
+-----------------
+id: children ... #
+
+n_nodes = { first line }
+Ap[n_nodes] = { 0 }  // most likely vector
+Ai = []  // most likely vector
+leaves = []  // leaves of the graph
+roots = [] // root of the graph
+
+// this will be _atomic_
+incoming[n_nodes] = { 0 } // number of incoming edges into each node
+
+globalCount = 0
+
+do n_nodes time {
+    node = { id }
+
+    add globalCount to Ap
+    add node to Ai
+    globalCount++
+
+    nchildren = 0
+
+    // while not #
+    for child in children {
+        add child to Ai
+        globalCount++
+
+        // to precalculate leaves
+        nchildren++
+
+        // to precalculate roots and incoming nodes (see phase 1)
+        incoming[child]++
+    }
+
+    // to precalculate leaves
+    if nchildren == 0
+        add to leafs
+}
+
+for node in incoming{
+    if(!node){
+        add node to roots
+    }
+}
+
+
+
+Phase 1: from dag to dt
+
+parents[n_nodes] = { -1 }
+paths[n_nodes] = { {} }
+
+Q = roots
+mP = mutex to protect P modifications
+
+while Q is not empty {
+    P = {}
+
+    for node in Q launch task tx {
+        starting_children = Ap[node] + 1
+        ending_children = Ap[node + 1]
+
+        Br = concatenate node to end of path[node]
+
+        for(i=starting_children; i<ending_children; i++) launch task ty {
+            current_child = Ai[i]
+
+            Qr = paths[current_child]
+
+            // lexicographic order
+            if Qr < Br {
+                paths[current_child] = Qr
+                parents[current_child] = node
+            }
+
+            atomic{ // sub
+                remaining = incoming[current_child]--
+            }
+
+            if(!remaining) lock mP {
+                add current_child to P
+            } unlock mP
+        }
+        
+        wait to all ty
+    }
+    
+    wait to all tx
+
+    Q = P
+}
