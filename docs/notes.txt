@@ -45,12 +45,9 @@ do n_nodes time {
         incoming[child]++
     }
 
-    // to precalculate leaves
-    if nchildren == 0
-        add to leafs
 }
 
-// mark end
+// mark end of Ai array
 add globalCount to Ap
 
 for node in incoming{
@@ -62,6 +59,7 @@ for node in incoming{
 
 
 Phase 1: from dag to dt
+// TODO: try and discuss optimization with Quer
 
 parents[n_nodes] = { -1 }
 paths[n_nodes] = { {} }
@@ -105,10 +103,10 @@ while Q is not empty {
             } unlock mP
         }
         
-        wait to all ty
+        wait all ty
     }
     
-    wait to all tx
+    wait all tx
 
     Q = P
 }
@@ -116,11 +114,13 @@ while Q is not empty {
 
 
 Phase 1.5: calculate new Ai, new Ap and number of outgoing nodes
+// this is atomic
+n_outgoing[n_nodes] = { 0 }
 
 Ap_dt[n_nodes+1] = { 0 }
 Ai_dt = []
 for 0 < i < n_nodes {
-    Ap_dt = Ai_dt.length
+    Ap_dt[i] = Ai_dt.length
 
     Ai_dt.push_back(i)
 
@@ -137,13 +137,21 @@ for 0 < i < n_nodes {
 
     }
 
-    if i > 0
+    // skip first iteration
+    if i > 0 {
         n_outgoing[i-1] = Ap_dt[i] - Ap_dt[i-1] - 1
+
+        if n_outgoing[i-1] == 0
+            add i-1 to leaves
+    }
 }
 
+// don't forget last node
+// save end of Ai array
 Ap_dt[n_nodes] = Ai_dt.length
 n_outgoing[n_nodes-1] = Ap_dt[n_nodes] - Ap_dt[n_nodes-1] - 1
-
+if n_outgoing[n_nodes-1] == 0
+    add n_nodes-1 to leaves
 
 Ap = Ap_dt
 Ai = Ai_dt
@@ -155,9 +163,6 @@ Phase 2: sub graph size
 sizes[n_nodes] = {0}
 Q = leaves
 
-// this is atomic
-n_outgoing[n_nodes] = { 0 }
-
 gamma[n_nodes] = { 0 }
 gamma_tilde[n_nodes] = { 0 }
 mC = mutex to protect C modifications
@@ -165,16 +170,18 @@ mC = mutex to protect C modifications
 while Q is not empty {
     C = {}
 
-    // note: explain deeply to Quer why there is no parallelism
     for node in Q do tasks tx {
 
         parent = parents[node]
+
+        // note: explain deeply to Quer why there is no parallelism
+        // we don't need parallelism (differently from the paper) since we have just one parent (we are in a dt)
 
         // check that it has a parent, i.e. it is not a root
         if parent == -1 {
 
             do atomic {
-            if(sub (n_outgoing, 1) == 0)
+            if(sub (n_outgoing[parent], 1) == 0)
             }
                 lock(mC){
                     insert parent into C
@@ -208,9 +215,10 @@ while Q is not empty {
 }
 
 Phase 3: pre and post order
-
+//TODO use a copy of n_outgoing array
 post_order[n_nodes] = { 0 }
 Q = roots
+mP mutex to protect P
 
 while Q is not empty {
 
@@ -228,7 +236,10 @@ while Q is not empty {
             child = Ai[i]
 
             post_order[child] = post + gamma_tilde[child]
-            insert child into P
+            lock(mP){
+                insert child into P
+            }unlock(mP)
+
         }
         wait tasks ty
 
@@ -242,3 +253,63 @@ while Q is not empty {
 
     Q = P
 }
+
+
+Phase 4: calculate outer (e_v) and inner rank (s_v)
+
+// TODO: this phase is not actually necessary
+// in fact:
+// e_v can be either computed in phase 3 or when writing the file
+// s_v can be computed as well for all the nodes except for the leaves in phase 3, when assigning
+// the post order of a node p by eventually updating the s_v of the parent if it is greater than the e_v of the current
+// node. Leaves can be simply calculated either when printing into the file or with another cycle on the leaves
+// precalculated array. Discuss this with Quer
+
+e_v[n_nodes] = { 0 }
+s_v[n_nodes] = { 0 }
+mutex mP to protect P modifications
+
+Q = leaves
+while Q is not empty {
+
+    P = {}
+
+    for p in Q launch tasks tx {
+        e_v[p] = post_order + 1
+
+        min = MAX_INT
+        children_start = Ap[p] + 1
+        children_end = Ap[p + 1]
+
+        if(children_start == children_end) {
+            // this is a leaf        
+            s_v[p] = e_v[p]
+        } else {
+            // iterate over children of current node p
+            for parent_children_start < i < parent_children_end {
+                // no parallelization in this cycle (min should be protected and that's not worth it)
+                child = Ai[i]
+   
+                // once here we have visited the children of the node p
+                if(e_v[child] < min) min = e_v[child]
+            }
+            
+        }
+        
+        // check that it has a parent, i.e. it is not a root
+        if parent == -1 {
+
+            do atomic {
+            if(sub (n_outgoing, 1) == 0)
+            }
+                lock(mP){
+                    insert parent into P
+                }unlock(mP)
+        }
+    }
+
+    wait tasks tx
+
+    Q = P
+}
+
