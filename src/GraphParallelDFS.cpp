@@ -17,10 +17,6 @@ const vector<int> &GraphParallelDFS::getAi() const {
     return Ai;
 }
 
-const vector<int> &GraphParallelDFS::getLeaves() const {
-    return leaves;
-}
-
 const vector<int> &GraphParallelDFS::getRoots() const {
     return roots;
 }

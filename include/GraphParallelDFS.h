@@ -42,8 +42,6 @@ public:
 
     const vector<int> &getAi() const;
 
-    const vector<int> &getLeaves() const;
-
     const vector<int> &getRoots() const;
 
     const vector<int> &getEV() const;
