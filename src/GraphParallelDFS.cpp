@@ -107,6 +107,9 @@ const vector<int> &GraphParallelDFS::getSV() const {
 }
 
 void GraphParallelDFS::convertToDT() {
+    // initialize parent vector
+    this->parents = vector<int>(this->n_nodes, -1);
+
     // vector holding the best current path for each node
     vector<vector<int>> paths = vector<vector<int>>(this->n_nodes);
 
