@@ -65,9 +65,6 @@ parents[n_nodes] = { -1 }
 paths[n_nodes] = { {} }
 nodeLock[n_nodes] = {...}
 
-// copy incoming into another array (for phase 3)
-backup incoming
-
 Q = roots
 mP = mutex to protect P modifications
 
@@ -83,14 +80,15 @@ while Q is not empty {
         for(i=starting_children; i<ending_children; i++) launch task ty {
             current_child = Ai[i]
 
+            // existing path
             Qr = paths[current_child]
 
             // CS for current child
             lock nodeLock[current_child] {
 
-            // lexicographic order
-            if Qr < Br {
-                paths[current_child] = Qr
+            // lexicographic order (update the path in the case in which it is empty)
+            if Qr = {} or Br <= Qr {
+                paths[current_child] = Br
                 parents[current_child] = node
             }
 
