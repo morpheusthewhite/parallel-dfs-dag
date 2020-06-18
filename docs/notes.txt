@@ -31,15 +31,10 @@ do n_nodes time {
     add node to Ai
     globalCount++
 
-    nchildren = 0
-
     // while not #
     for child in children {
         add child to Ai
         globalCount++
-
-        // to precalculate leaves
-        nchildren++
 
         // to precalculate roots and incoming nodes (see phase 1)
         incoming[child]++
