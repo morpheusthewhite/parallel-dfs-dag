@@ -3,7 +3,84 @@
 //
 
 #include "../include/GraphParallelDFS.h"
+#include <fstream>
+#include <sstream>
+#include "../include/InvalidGraphInputFile.h"
+#include <cctype>
 
+using namespace std;
+
+GraphParallelDFS::GraphParallelDFS(const string &filename) {
+    ifstream inputFile(filename);
+    string buffer;
+
+    if(!inputFile.is_open()){
+        throw InvalidGraphInputFile("Unable to open the file");
+    }
+
+    // Get the number of nodes in the graph
+    if(getline(inputFile, buffer)){
+        istringstream stream(buffer);
+        stream >> this->n_nodes;
+    }
+
+    //check the validity of the number of nodes
+    if(this->n_nodes > 0){
+        this->incoming_edges.resize(n_nodes);
+    }else{
+        throw InvalidGraphInputFile("Number of node in the graph not valid");
+    }
+
+    while(getline(inputFile, buffer)){
+        int node;
+        char c_buffer;
+        istringstream stream(buffer);
+
+        // save node index in Ap
+        this->Ap.push_back(this->Ai.size());
+
+        // read the first node
+        stream >> node;
+        this->Ai.push_back(node);
+
+        while(stream >> c_buffer && c_buffer != '#'){
+            if(isdigit(c_buffer)){
+                int child;
+                //go one position back to read the number
+                int pos = stream.tellg();
+                stream.seekg(pos-1);
+
+                //save the child
+                stream >> child;
+
+                //check the validity of the node value
+                if(child < n_nodes){
+                    this->Ai.push_back(child);
+                }else{
+                    throw InvalidGraphInputFile("Out of bound node");
+                }
+
+                //update incoming nodes
+                this->incoming_edges[child]++;
+            }
+        }
+    }
+
+    //check the saved number of nodes
+    if(this->Ap.size() != n_nodes){
+        throw InvalidGraphInputFile("The number of read nodes doesn't match the declared one");
+    }
+
+    // mark end of Ai array
+    this->Ap.push_back(Ai.size());
+
+    //work out roots of the graph
+    for(int i = 0; i < this->n_nodes; i++){
+        if(!this->incoming_edges[i]){
+            this->roots.push_back(i);
+        }
+    }
+}
 
 int GraphParallelDFS::getNNodes() const {
     return n_nodes;
