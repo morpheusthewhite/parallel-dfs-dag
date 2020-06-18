@@ -7,6 +7,9 @@
 
 #include <string>
 #include <vector>
+#include <mutex>
+#include <future>
+
 using namespace std;
 
 class GraphParallelDFS {
@@ -67,7 +70,7 @@ private:
     vector<int> roots;
 
     // count of edges entering each node
-    vector<int> incoming_nodes;
+    vector<int> incoming_edges;
     
     // actual labels
     vector<int> e_v;
@@ -75,6 +78,7 @@ private:
     
     vector<int> gamma;
     vector<int> gamma_tilde;
+    vector<int> parents;
 };
 
 
