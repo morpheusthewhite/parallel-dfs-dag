@@ -1,7 +1,3 @@
-//
-// Created by francesco on 6/16/20.
-//
-
 #ifndef PARALLEL_DFS_DAG_GRAPHPARALLELDFS_H
 #define PARALLEL_DFS_DAG_GRAPHPARALLELDFS_H
 
@@ -37,7 +33,7 @@ public:
     void convertToDT();
 
     friend ostream& operator<<(ostream& os, GraphParallelDFS& graphParallelDfs);
-    
+
     // getters here
     int getNNodes() const;
 
@@ -54,13 +50,13 @@ public:
 private:
     // phase 2
     void computeSubGraphSize();
-    
+
     // phase 3
     void computePostOrder();
-    
+
     // phase 4
     void computeRanks();
-    
+
     int n_nodes;
     vector<int> Ap;
     vector<int> Ai;
@@ -71,11 +67,13 @@ private:
 
     // count of edges entering each node
     vector<int> incoming_edges;
-    
+    // count of edges outgoing each node
+    vector<int> outgoing_edges;
+
     // actual labels
     vector<int> e_v;
     vector<int> s_v;
-    
+
     vector<int> gamma;
     vector<int> gamma_tilde;
     vector<int> parents;

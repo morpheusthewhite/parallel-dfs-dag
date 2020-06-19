@@ -1,16 +1,12 @@
-//
-// Created by francesco on 6/16/20.
-//
-
-#include "../include/GraphParallelDFS.h"
 #include <fstream>
 #include <sstream>
-#include "../include/InvalidGraphInputFile.h"
 #include <cctype>
+#include "InvalidGraphInputFile.h"
+#include "GraphParallelDFS.h"
 
 using namespace std;
 
-GraphParallelDFS::GraphParallelDFS(const string &filename) {
+GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0){
     ifstream inputFile(filename);
     string buffer;
 
@@ -75,7 +71,7 @@ GraphParallelDFS::GraphParallelDFS(const string &filename) {
     this->Ap.push_back(Ai.size());
 
     //work out roots of the graph
-    for(int i = 0; i < this->n_nodes; i++){
+    for(unsigned int i = 0; i < this->n_nodes; i++){
         if(!this->incoming_edges[i]){
             this->roots.push_back(i);
         }
@@ -202,4 +198,47 @@ void GraphParallelDFS::convertToDT() {
         Q = move(P);
     }
 
+    // calculate new Ai, new Ap and number of outgoing edges
+    this->outgoing_edges.resize(n_nodes);
+    vector<int> Ap_dt = vector<int>(n_nodes + 1, 0);
+    vector<int> Ai_dt = vector<int>();
+    
+    for(int i=0; i<n_nodes; i++){
+        Ap_dt[i] = Ai_dt.size();
+        Ai_dt.push_back(i);
+        
+        int first_child = Ap[i] + 1;
+        int end_child = Ap[i + 1];
+        
+        // iterate over child of current node i
+        for(int j=first_child; j<end_child; j++){
+            int child = Ai[j];
+
+            // verify that this child is a child in dt
+            if(this->parents[child] == i)
+                Ai_dt.push_back(child);
+        }
+
+        // skip first iteration
+        if(i > 0){
+            this->outgoing_edges[i-1] = Ap_dt[i] - Ap_dt[i-1] - 1;
+            
+            if(!this->outgoing_edges[i-1]){
+                this->leaves.push_back(i-1);
+            }
+        }
+    }
+    
+    // Add Ai dimension to dt
+    Ap_dt[this->n_nodes] = Ai_dt.size();
+    
+    // update of the number of outgoing edges for the last node (since in the previous cycle it is
+    // ignored (we skip the first element))
+    this->outgoing_edges[this->n_nodes-1] = Ap_dt[n_nodes] - Ap_dt[n_nodes-1] - 1;
+    if(!this->outgoing_edges[n_nodes-1]){
+        this->leaves.push_back(n_nodes-1);
+    }
+
+    this->Ap = move(Ap_dt);
+    this->Ai = move(Ai_dt);
 }
