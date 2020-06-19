@@ -128,7 +128,7 @@ void GraphParallelDFS::convertToDT() {
 
     while(!Q.empty()){
         node_futures.clear();
-        P.clear();
+        P = vector<int>();
 
         for(int node : Q){
             // create and launch a task for each node in Q
