@@ -242,3 +242,23 @@ void GraphParallelDFS::convertToDT() {
     this->Ap = move(Ap_dt);
     this->Ai = move(Ai_dt);
 }
+
+void GraphParallelDFS::computePostOrder() {}
+
+void GraphParallelDFS::computeSubGraphSize(){}
+
+void GraphParallelDFS::computeRanks(){}
+
+void GraphParallelDFS::computeLabels() {
+    // phase 1
+    this->convertToDT();
+
+    // phase 2
+    this->computeSubGraphSize();
+
+    // phase 3
+    this->computePostOrder();
+
+    // phase 4
+    this->computeRanks();
+}
