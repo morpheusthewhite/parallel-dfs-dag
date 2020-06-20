@@ -109,6 +109,7 @@ while Q is not empty {
 Phase 1.5: calculate new Ai, new Ap and number of outgoing nodes
 // this is atomic
 n_outgoing[n_nodes] = { 0 }
+gamma[n_nodes] = { 0 } // will be computed for leaves (needed in the next phase)
 
 Ap_dt[n_nodes+1] = { 0 }
 Ai_dt = []
@@ -136,6 +137,7 @@ for 0 < i < n_nodes {
 
         if n_outgoing[i-1] == 0
             add i-1 to leaves
+            gamma[n_nodes-1] = 1
     }
 }
 
@@ -145,6 +147,7 @@ Ap_dt[n_nodes] = Ai_dt.length
 n_outgoing[n_nodes-1] = Ap_dt[n_nodes] - Ap_dt[n_nodes-1] - 1
 if n_outgoing[n_nodes-1] == 0
     add n_nodes-1 to leaves
+    gamma[n_nodes-1] = 1
 
 Ap = Ap_dt
 Ai = Ai_dt
@@ -153,10 +156,9 @@ Ai = Ai_dt
 
 Phase 2: sub graph size
 
-sizes[n_nodes] = {0}
 Q = leaves
 
-gamma[n_nodes] = { 0 }
+// gamma was already initialized in the previous phase
 gamma_tilde[n_nodes] = { 0 }
 mC = mutex to protect C modifications
 
@@ -171,7 +173,7 @@ while Q is not empty {
         // we don't need parallelism (differently from the paper) since we have just one parent (we are in a dt)
 
         // check that it has a parent, i.e. it is not a root
-        if parent == -1 {
+        if parent != -1 {
 
             do atomic {
             if(sub (n_outgoing[parent], 1) == 0)
@@ -188,6 +190,8 @@ while Q is not empty {
 
         parent_children_start = Ap[p] + 1
         parent_children_end = Ap[p + 1]
+
+        sort in-place elements from Ap[parent_children_start] to (excluded) Ap[parent_children_end]
 
         // iterate over children of p
         for parent_children_start < i < parent_children_end {
