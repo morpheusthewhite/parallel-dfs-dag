@@ -1,6 +1,7 @@
 #include <fstream>
 #include <sstream>
 #include <cctype>
+#include <algorithm>
 #include "InvalidGraphInputFile.h"
 #include "GraphParallelDFS.h"
 
@@ -198,18 +199,20 @@ void GraphParallelDFS::convertToDT() {
         Q = move(P);
     }
 
-    // calculate new Ai, new Ap and number of outgoing edges
+    // calculate new Ai, new Ap, number of outgoing edges, leaves and their gamma (obvious: it's 1)
     this->outgoing_edges.resize(n_nodes);
     vector<int> Ap_dt = vector<int>(n_nodes + 1, 0);
     vector<int> Ai_dt = vector<int>();
-    
+
+    this->gamma.resize(this->n_nodes, 0);
+
     for(int i=0; i<n_nodes; i++){
         Ap_dt[i] = Ai_dt.size();
         Ai_dt.push_back(i);
-        
+
         int first_child = Ap[i] + 1;
         int end_child = Ap[i + 1];
-        
+
         // iterate over child of current node i
         for(int j=first_child; j<end_child; j++){
             int child = Ai[j];
@@ -222,21 +225,23 @@ void GraphParallelDFS::convertToDT() {
         // skip first iteration
         if(i > 0){
             this->outgoing_edges[i-1] = Ap_dt[i] - Ap_dt[i-1] - 1;
-            
+
             if(!this->outgoing_edges[i-1]){
                 this->leaves.push_back(i-1);
+                this->gamma[i-1] = 1;
             }
         }
     }
-    
+
     // Add Ai dimension to dt
     Ap_dt[this->n_nodes] = Ai_dt.size();
-    
+
     // update of the number of outgoing edges for the last node (since in the previous cycle it is
     // ignored (we skip the first element))
     this->outgoing_edges[this->n_nodes-1] = Ap_dt[n_nodes] - Ap_dt[n_nodes-1] - 1;
     if(!this->outgoing_edges[n_nodes-1]){
         this->leaves.push_back(n_nodes-1);
+        this->gamma[n_nodes - 1] = 1;
     }
 
     this->Ap = move(Ap_dt);
@@ -245,7 +250,107 @@ void GraphParallelDFS::convertToDT() {
 
 void GraphParallelDFS::computePostOrder() {}
 
-void GraphParallelDFS::computeSubGraphSize(){}
+void GraphParallelDFS::computeSubGraphSize(){
+    // use precomputed leaves
+    // since they will not be used in the next phases they can be directly moved
+    vector<int> Q = move(this->leaves);
+
+    // initialize gamma_tilde vector
+    // note: gamma vector does not need to be initialized since it was done
+    // in the phase 1 (when also computing its (obvious) value for the leaves)
+    this->gamma_tilde.resize(this->n_nodes, 0);
+
+    vector<int> C;
+
+    // mutex to protect C modifications
+    mutex mC;
+
+    // copy count of outgoing edges into an atomic vector
+    // since there will be concurrency in the next cycle on these
+    // variables
+    vector<atomic_int> outgoing_edges_atomic(this->n_nodes);
+    for(int i=0; i<n_nodes; i++)
+        outgoing_edges_atomic[i].store(this->outgoing_edges[i]);
+
+    // vector to collect all the node futures
+    vector<future<void>> node_futures;
+
+    while(!Q.empty()){
+        node_futures.clear();
+        C = vector<int>();
+
+        for(int node : Q){
+            // create and launch a task for each node in Q
+            packaged_task<void(int)> task([this, &mC, &C, &outgoing_edges_atomic](int node) {
+
+                // differently from the paper here it is not present another loop
+                // this because in the previous phase the DAG was converted to a
+                // directed tree, hence each node will have at most one parent
+                int parent = this->parents[node];
+
+                // verify that it is actually a parent, i. e. it is not -1
+                if(parent != -1){
+
+                    // check if no more outgoing edges needs to be visited yet
+                    // note: fetch_sub returns the previous value
+                    if(outgoing_edges_atomic[parent].fetch_sub(1) == 1){
+                        mC.lock();
+                        C.push_back(parent);
+                        mC.unlock();
+                    }
+                }
+
+            });
+
+            node_futures.push_back(move(task.get_future()));
+
+            // actually launch task
+            task(node);
+        }
+
+        // wait for all launched tasks to terminate
+        for(auto& node_future : node_futures)
+            node_future.get();
+
+        node_futures.clear();
+
+        for(int p : C) {
+
+            // create and launch a task for each node in P
+            packaged_task<void(int)> task([this](int p) {
+                int first_child = Ap[p] + 1;
+                int end_child = Ap[p + 1];
+
+                // order children of P
+                // no race condition since each task will operate on a different section of Ai
+                sort(this->Ai.begin() + first_child, this->Ai.begin() + end_child);
+
+                // iterate over children of P
+                for (int i = first_child; i < end_child; i++) {
+                    int child = Ai[i];
+
+                    this->gamma_tilde[child] = gamma[p];
+                    this->gamma[p] += gamma[child];
+                }
+
+                // count also p itself in the size of its subgraph
+                this->gamma[p]++;
+            });
+
+            node_futures.push_back(move(task.get_future()));
+
+            // actually launch task
+            task(p);
+        }
+
+        // wait for all launched tasks to terminate
+        for(auto& node_future : node_futures)
+            node_future.get();
+
+        // move all content of C to Q
+        Q = move(C);
+    }
+}
 
 void GraphParallelDFS::computeRanks(){}
 
