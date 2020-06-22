@@ -212,7 +212,6 @@ while Q is not empty {
 }
 
 Phase 3: pre and post order
-//TODO use a copy of n_outgoing array
 post_order[n_nodes] = { 0 }
 Q = roots
 mP mutex to protect P
