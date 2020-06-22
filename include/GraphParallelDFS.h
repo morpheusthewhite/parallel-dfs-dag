@@ -77,6 +77,7 @@ private:
     vector<int> gamma;
     vector<int> gamma_tilde;
     vector<int> parents;
+    vector<int> post_order;
 };
 
 

@@ -248,7 +248,81 @@ void GraphParallelDFS::convertToDT() {
     this->Ai = move(Ai_dt);
 }
 
-void GraphParallelDFS::computePostOrder() {}
+void GraphParallelDFS::computePostOrder() {
+    // Initialize the post order vector
+    this->post_order.resize(this->n_nodes, 0);
+
+    // Use the precomputed roots
+    // Move them for performance reason since they won't be used anymore
+    // TODO: if we decide to move remember to remove the getRoot()
+    vector<int> Q = move(this->roots);
+
+    //mutex which protect P vector modifications
+    mutex mP;
+
+    // prepare vector of future for tasks
+    vector<future<void>> node_futures;
+
+    while(!Q.empty()){
+        // clear the vector of future
+        node_futures.clear();
+
+        vector<int> P;
+
+        for(int node : Q){
+            // create and launch a task for each node in Q
+            packaged_task<void(int)> task([this, &mP, &P](int node) {
+                int post = this->post_order[node];
+
+                int children_start = this->Ap[node]+1;
+                int children_end = this->Ap[node+1];
+
+                // vector which collect the children futures
+                vector<future<void>> child_futures;
+
+                //iterate over the children of the current node
+                for(int i = children_start; i < children_end; i++){
+                    // create and launch task for each child of the node
+                    packaged_task<void(int)> task_child([this, &post, &mP, &P](int index){
+                        int child = this->Ai[index];
+
+                        // pre-compute post-order
+                        post_order[child] = post + this->gamma_tilde[child];
+
+                        // add child in P for the next iteration
+                        mP.lock();
+                        P.push_back(child);
+                        mP.unlock();
+                    });
+
+                    child_futures.push_back(move(task_child.get_future()));
+
+                    // launch task
+                    task_child(i);
+                }
+                // wait termination of child tasks
+                for(auto& child_future : child_futures)
+                    child_future.get();
+
+                // work out post-order of node
+                this->post_order[node] = post + this->gamma[node] -1;
+            });
+
+            node_futures.push_back(move(task.get_future()));
+
+            // launch task
+            task(node);
+        }
+
+        // wait termination of all the node tasks
+        for(auto& node_future : node_futures)
+            node_future.get();
+
+        // move P in Q for the following iteration
+        Q = move(P);
+    }
+
+}
 
 void GraphParallelDFS::computeSubGraphSize(){
     // use precomputed leaves
