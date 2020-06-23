@@ -14,8 +14,8 @@ File format
 id: children ... #
 
 n_nodes = { first line }
-Ap[n_nodes + 1] = { 0 }  // one entry for each node ande for marking end
-Ai = []  // most likely vector
+Ap_dag[n_nodes + 1] = { 0 }  // one entry for each node ande for marking end
+Ai_dag = []  // most likely vector
 leaves = []  // leaves of the graph
 roots = [] // root of the graph
 
@@ -27,13 +27,13 @@ globalCount = 0
 do n_nodes time {
     node = { id }
 
-    add globalCount to Ap
-    add node to Ai
+    add globalCount to Ap_dag
+    add node to Ai_dag
     globalCount++
 
     // while not #
     for child in children {
-        add child to Ai
+        add child to Ai_dag
         globalCount++
 
         // to precalculate roots and incoming nodes (see phase 1)
@@ -42,8 +42,8 @@ do n_nodes time {
 
 }
 
-// mark end of Ai array
-add globalCount to Ap
+// mark end of Ai_dag array
+add globalCount to Ap_dag
 
 for node in incoming{
     if(!node){
@@ -60,6 +60,9 @@ parents[n_nodes] = { -1 }
 paths[n_nodes] = { {} }
 nodeLock[n_nodes] = {...}
 
+// contains the list of the parents for each node (as from the dag)
+parents_dag[n_nodes] = { {} }
+
 Q = roots
 mP = mutex to protect P modifications
 
@@ -67,13 +70,13 @@ while Q is not empty {
     P = {}
 
     for node in Q launch task tx {
-        starting_children = Ap[node] + 1
-        ending_children = Ap[node + 1]
+        starting_children = Ap_dag[node] + 1
+        ending_children = Ap_dag[node + 1]
 
         Br = concatenate node to end of path[node]
 
         for(i=starting_children; i<ending_children; i++) launch task ty {
-            current_child = Ai[i]
+            current_child = Ai_dag[i]
 
             // existing path
             Qr = paths[current_child]
@@ -86,6 +89,9 @@ while Q is not empty {
                 paths[current_child] = Br
                 parents[current_child] = node
             }
+
+            // add this parent to the list of the parents of the child
+            parents_dag[current_child].push_back(node)
 
             remaining = incoming[current_child]--
             } unlock nodeLock[current_child]
@@ -106,7 +112,7 @@ while Q is not empty {
 
 
 
-Phase 1.5: calculate new Ai, new Ap and number of outgoing nodes
+Phase 1.5: calculate new Ai_dt, new Ap_dt and number of outgoing nodes
 // this is atomic
 n_outgoing[n_nodes] = { 0 }
 gamma[n_nodes] = { 0 } // will be computed for leaves (needed in the next phase)
@@ -118,12 +124,12 @@ for 0 < i < n_nodes {
 
     Ai_dt.push_back(i)
 
-    children_start = Ap[i] + 1
-    children_end = Ap[i + 1]
+    children_start = Ap_dt[i] + 1
+    children_end = Ap_dt[i + 1]
 
     // iterate over children of current node i
     for parent_children_start < j < parent_children_end {
-        child = Ai[j]
+        child = Ai_dt[j]
 
         // verify that this child is a child in dt
         if (parent[child] == i)
@@ -142,16 +148,12 @@ for 0 < i < n_nodes {
 }
 
 // don't forget last node
-// save end of Ai array
+// save end of Ai_dt array
 Ap_dt[n_nodes] = Ai_dt.length
 n_outgoing[n_nodes-1] = Ap_dt[n_nodes] - Ap_dt[n_nodes-1] - 1
 if n_outgoing[n_nodes-1] == 0
     add n_nodes-1 to leaves
     gamma[n_nodes-1] = 1
-
-Ap = Ap_dt
-Ai = Ai_dt
-
 
 
 Phase 2: sub graph size
@@ -188,14 +190,14 @@ while Q is not empty {
 
     for p in C do task ty {
 
-        parent_children_start = Ap[p] + 1
-        parent_children_end = Ap[p + 1]
+        parent_children_start = Ap_dt[p] + 1
+        parent_children_end = Ap_dt[p + 1]
 
-        sort in-place elements from Ap[parent_children_start] to (excluded) Ap[parent_children_end]
+        sort in-place elements from Ap_dt[parent_children_start] to (excluded) Ap_dt[parent_children_end]
 
         // iterate over children of p
         for parent_children_start < i < parent_children_end {
-            child = Ai[i]
+            child = Ai_dt[i]
 
             gamma_tilde[child] = gamma[p]
             gamma[p] += gamma[child]
@@ -224,12 +226,12 @@ while Q is not empty {
 
         post = post_order[p]
 
-        children_start = Ap[p] + 1
-        children_end = Ap[p + 1]
+        children_start = Ap_dt[p] + 1
+        children_end = Ap_dt[p + 1]
 
         // iterate over children of current node p
         for parent_children_start < i < parent_children_end launch tasks ty {
-            child = Ai[i]
+            child = Ai_dt[i]
 
             post_order[child] = post + gamma_tilde[child]
             lock(mP){
@@ -271,11 +273,11 @@ while Q is not empty {
     P = {}
 
     for p in Q launch tasks tx {
-        e_v[p] = post_order + 1
+        e_v[p] = post_order[p] + 1
 
         min = MAX_INT
-        children_start = Ap[p] + 1
-        children_end = Ap[p + 1]
+        children_start = Ap_dag[p] + 1
+        children_end = Ap_dag[p + 1]
 
         if(children_start == children_end) {
             // this is a leaf        
@@ -284,19 +286,20 @@ while Q is not empty {
             // iterate over children of current node p
             for parent_children_start < i < parent_children_end {
                 // no parallelization in this cycle (min should be protected and that's not worth it)
-                child = Ai[i]
+                child = Ai_dag[i]
    
                 // once here we have visited the children of the node p
-                if(e_v[child] < min) min = e_v[child]
+                if(s_v[child] < min) min = s_v[child]
             }
-            
+
+            s_v[p] = min
         }
         
         // check that it has a parent, i.e. it is not a root
-        if parent == -1 {
+        if parent[p] != -1 {
 
             do atomic {
-            if(sub (n_outgoing, 1) == 0)
+            if(sub (n_outgoing[parent], 1) == 0)
             }
                 lock(mP){
                     insert parent into P
