@@ -1,5 +1,27 @@
-#include "../include/GraphParallelDFS.h"
+#include <iostream>
+#include <InvalidGraphInputFile.h>
+#include <OutputFileException.h>
+#include "GraphParallelDFS.h"
 
-int main(){
+using namespace std;
+
+int main(int argc, char * argv[]){
+    if(argc < 2){
+        cout << "Usage: input_file output_file";
+        return 1;
+    }
+
+    try{
+        GraphParallelDFS graph(argv[1]);
+        graph.computeLabels();
+        graph.saveTo(argv[2]);
+    } catch (InvalidGraphInputFile &e) {
+        cout << e.what();
+        return 1;
+    } catch (OutputFileException &e) {
+        cout << e.what();
+        return 1;
+    }
+
     return 0;
 }
