@@ -34,14 +34,19 @@ public:
 
     friend ostream& operator<<(ostream& os, GraphParallelDFS& graphParallelDfs);
 
+    // create output file
+    void saveTo(const string& filename);
+
     // getters here
     int getNNodes() const;
 
-    const vector<int> &getAp() const;
+    const vector<int> &getAp_dag() const;
 
-    const vector<int> &getAi() const;
+    const vector<int> &getAi_dag() const;
 
-    const vector<int> &getRoots() const;
+    const vector<int> &getAp_dt() const;
+
+    const vector<int> &getAi_dt() const;
 
     const vector<int> &getEV() const;
 
@@ -58,8 +63,11 @@ private:
     void computeRanks();
 
     int n_nodes;
-    vector<int> Ap;
-    vector<int> Ai;
+    vector<int> Ap_dag;
+    vector<int> Ai_dag;
+
+    vector<int> Ap_dt;
+    vector<int> Ai_dt;
 
     // precomputed leaves and roots
     vector<int> leaves;
@@ -76,8 +84,13 @@ private:
 
     vector<int> gamma;
     vector<int> gamma_tilde;
-    vector<int> parents;
     vector<int> post_order;
+
+    // contains the parent of each node in the dt
+    vector<int> parents;
+
+    // contains all the parents of each node in the dag
+    vector<vector<int>> parents_dag;
 };
 
 
