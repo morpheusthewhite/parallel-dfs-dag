@@ -35,7 +35,7 @@ GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0){
         char c_buffer;
         istringstream stream(buffer);
 
-        // save node index in Ap_dt
+        // save node index in Ap
         this->Ap_dag.push_back(this->Ai_dag.size());
 
         // read the first node
@@ -70,7 +70,7 @@ GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0){
         throw InvalidGraphInputFile("The number of read nodes doesn't match the declared one");
     }
 
-    // mark end of Ai_dt array
+    // mark end of Ai_dag array
     this->Ap_dag.push_back(Ai_dag.size());
 
     //work out roots of the graph
@@ -111,7 +111,7 @@ const vector<int> &GraphParallelDFS::getSV() const {
 
 void GraphParallelDFS::convertToDT() {
     // initialize parent vector
-    this->parents = vector<int>(this->n_nodes, -1);
+    this->parents.resize(this->n_nodes, -1);
 
     // vector holding the best current path for each node
     vector<vector<int>> paths = vector<vector<int>>(this->n_nodes);
@@ -129,8 +129,8 @@ void GraphParallelDFS::convertToDT() {
 
     vector<int> P;
 
-    // store the list of the parents of the dag for each node
-    parents_dag.resize(n_nodes);
+    // store the list of the parents in the dag for each node
+    this->parents_dag.resize(n_nodes);
 
     while(!Q.empty()){
         node_futures.clear();
@@ -213,7 +213,7 @@ void GraphParallelDFS::convertToDT() {
 
     // calculate new Ai_dt, new Ap_dt, number of outgoing edges, leaves and their gamma (obvious: it's 1)
     this->outgoing_edges.resize(n_nodes);
-    Ap_dt.resize(n_nodes + 1, 0);
+    this->Ap_dt.resize(n_nodes + 1, 0);
 
     this->gamma.resize(this->n_nodes, 0);
 
@@ -282,14 +282,14 @@ void GraphParallelDFS::computePostOrder() {
             packaged_task<void(int)> task([this, &mP, &P](int node) {
                 int post = this->post_order[node];
 
-                int children_start = this->Ap_dt[node] + 1;
-                int children_end = this->Ap_dt[node + 1];
+                int child_start = this->Ap_dt[node] + 1;
+                int child_end = this->Ap_dt[node + 1];
 
                 // vector which collect the children futures
                 vector<future<void>> child_futures;
 
                 //iterate over the children of the current node
-                for(int i = children_start; i < children_end; i++){
+                for(int i = child_start; i < child_end; i++){
                     // create and launch task for each child of the node
                     packaged_task<void(int)> task_child([this, &post, &mP, &P](int index){
                         int child = this->Ai_dt[index];
@@ -435,8 +435,8 @@ void GraphParallelDFS::computeSubGraphSize(){
 }
 
 void GraphParallelDFS::computeRanks(){
-    this->e_v.resize(this->n_nodes, 0);
-    this->s_v.resize(this->n_nodes, 0);
+    this->e_v.resize(this->n_nodes);
+    this->s_v.resize(this->n_nodes);
 
     vector<int> P;
     
@@ -476,13 +476,12 @@ void GraphParallelDFS::computeRanks(){
                 int first_child = Ap_dag[node] + 1;
                 int end_child = Ap_dag[node + 1];
 
-                int min = INT_MAX;
-
                 if(first_child == end_child){
                     // this is a leaf so e_v and s_v will correspond
                     s_v[node] = e_v[node];
                 } else {
                     // iterate over children of node
+                    int min = INT_MAX;
 
                     // we compute the s_v in this case as the minimum of the s_v of the children
                     // since they s_v is:
