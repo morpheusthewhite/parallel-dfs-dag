@@ -14,18 +14,6 @@ public:
 
     GraphParallelDFS(const string& filename);
 
-    // copy constructor
-    GraphParallelDFS(const GraphParallelDFS& other);
-
-    // move constructor
-    GraphParallelDFS(GraphParallelDFS&& other);
-
-    // copy assignment
-    GraphParallelDFS& operator=(const GraphParallelDFS& other);
-
-    // move assignment
-    GraphParallelDFS& operator=(GraphParallelDFS&& other);
-
     // this function will calculate the final labels, going through all the phases
     void computeLabels();
 
