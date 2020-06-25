@@ -129,7 +129,7 @@ void GraphParallelDFS::convertToDT() {
 
     vector<int> P;
 
-    // store the list of the parents in the dag for each node
+    // store the list of the parents in the dag for each node except the one in the dt
     this->parents_dag.resize(n_nodes);
 
     while(!Q.empty()){
@@ -166,14 +166,19 @@ void GraphParallelDFS::convertToDT() {
                         // - We found a path Br which is better than the current one
                         if(Qr.empty() || Br <= Qr){
                             paths[child] = Br;
+
+                            // the previous one, if existing, is a parent in the dag which is not present in the dt
+                            if(parents[child] != -1)
+                                this->parents_dag[child].push_back(parents[child]);
+
                             parents[child] = current_parent;
+                        } else {
+                            // the current parent is not part of the dt but it is actually part of the dag
+                            this->parents_dag[child].push_back(current_parent);
                         }
 
                         // decrement the count of incoming edges which needs to be visited yet for the node child
                         int remaining = --(this->incoming_edges[child]);
-
-                        // store the current parent of the current child
-                        this->parents_dag[child].push_back(current_parent);
 
                         node_mutexes[child].unlock();
 
@@ -501,15 +506,29 @@ void GraphParallelDFS::computeRanks(){
                 }
 
                 // update the count of the visited outgoing edges for the parentS of the current node
-                // NOTE: root nodes will never enter this cycle
-                for(int parent : parents_dag[node]){
-                    int remaining = outgoing[parent].fetch_sub(1);
+                // 1. first consider the parent in the dt
 
-                    // check that no more children (of this parent) needs to be visited yet
+                int parent_dt = this->parents[node];
+                // NOTE: root nodes will never enter this condition
+                if(parent_dt != -1){
+                    int remaining = outgoing[parent_dt].fetch_sub(1);
+                    // check that no more children (of the dt parent) needs to be visited yet
                     if(remaining == 1){
                         mP.lock();
-                        P.push_back(parent);
+                        P.push_back(parent_dt);
                         mP.unlock();
+                    }
+
+                    // 2. then consider the parent(s) in the dag except the one from in the dt (already considered)
+                    for(int parent : parents_dag[node]){
+                        remaining = outgoing[parent].fetch_sub(1);
+
+                        // check that no more children (of this parent) needs to be visited yet
+                        if(remaining == 1){
+                            mP.lock();
+                            P.push_back(parent);
+                            mP.unlock();
+                        }
                     }
                 }
             });
