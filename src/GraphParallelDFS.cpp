@@ -3,11 +3,14 @@
 #include <cctype>
 #include <algorithm>
 #include <climits>
+#include <chrono>
+#include <iostream>
 #include "InvalidGraphInputFile.h"
 #include "OutputFileException.h"
 #include "GraphParallelDFS.h"
 
 using namespace std;
+using namespace std::chrono;
 
 GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0){
     ifstream inputFile(filename);
@@ -16,6 +19,10 @@ GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0){
     if(!inputFile.is_open()){
         throw InvalidGraphInputFile("Unable to open the file");
     }
+
+#ifdef PRINT_TIME
+    auto function_start = high_resolution_clock::now();
+#endif
 
     // Get the number of nodes in the graph
     if(getline(inputFile, buffer)){
@@ -79,6 +86,12 @@ GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0){
             this->roots.push_back(i);
         }
     }
+
+#ifdef PRINT_TIME
+    auto function_end = high_resolution_clock::now();
+    auto function_interval = duration_cast<milliseconds>(function_end-function_start);
+    cout << "File parsing ends in: " << function_interval.count() << " milliseconds"  << endl;
+#endif
 }
 
 int GraphParallelDFS::getNNodes() const {
@@ -110,6 +123,9 @@ const vector<int> &GraphParallelDFS::getSV() const {
 }
 
 void GraphParallelDFS::convertToDT() {
+#ifdef PRINT_TIME
+    auto function_start = high_resolution_clock::now();
+#endif
     // initialize parent vector
     this->parents.resize(this->n_nodes, -1);
 
@@ -259,10 +275,17 @@ void GraphParallelDFS::convertToDT() {
         this->leaves.push_back(n_nodes-1);
         this->gamma[n_nodes - 1] = 1;
     }
-
+#ifdef PRINT_TIME
+    auto function_end = high_resolution_clock::now();
+    auto function_interval = duration_cast<milliseconds>(function_end-function_start);
+    cout << "DT conversion ends in: " << function_interval.count() << " milliseconds"  << endl;
+#endif
 }
 
 void GraphParallelDFS::computePostOrder() {
+#ifdef PRINT_TIME
+    auto function_start = high_resolution_clock::now();
+#endif
     // Initialize the post order vector
     this->post_order.resize(this->n_nodes, 0);
 
@@ -334,10 +357,17 @@ void GraphParallelDFS::computePostOrder() {
         // move P in Q for the following iteration
         Q = move(P);
     }
-
+#ifdef PRINT_TIME
+    auto function_end = high_resolution_clock::now();
+    auto function_interval = duration_cast<milliseconds>(function_end-function_start);
+    cout << "Post order ends in: " << function_interval.count() << " milliseconds"  << endl;
+#endif
 }
 
 void GraphParallelDFS::computeSubGraphSize(){
+#ifdef PRINT_TIME
+    auto function_start = high_resolution_clock::now();
+#endif
     // use precomputed leaves
     // since they will not be used in the next phases they can be directly moved
     vector<int> Q = move(this->leaves);
@@ -437,9 +467,17 @@ void GraphParallelDFS::computeSubGraphSize(){
         // move all content of C to Q
         Q = move(C);
     }
+#ifdef PRINT_TIME
+    auto function_end = high_resolution_clock::now();
+    auto function_interval = duration_cast<milliseconds>(function_end-function_start);
+    cout << "Sub graph size calculation ends in: " << function_interval.count() << " milliseconds"  << endl;
+#endif
 }
 
 void GraphParallelDFS::computeRanks(){
+#ifdef PRINT_TIME
+    auto function_start = high_resolution_clock::now();
+#endif
     this->e_v.resize(this->n_nodes);
     this->s_v.resize(this->n_nodes);
 
@@ -547,6 +585,11 @@ void GraphParallelDFS::computeRanks(){
         // move all content of P to Q
         Q = move(P);
     }
+#ifdef PRINT_TIME
+    auto function_end = high_resolution_clock::now();
+    auto function_interval = duration_cast<milliseconds>(function_end-function_start);
+    cout << "Rank computation ends in: " << function_interval.count() << " milliseconds"  << endl;
+#endif
 }
 
 ostream& operator<<(ostream &os, GraphParallelDFS &graphParallelDfs) {
