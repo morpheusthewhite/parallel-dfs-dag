@@ -289,6 +289,18 @@ void GraphParallelDFS::computePostOrder() {
     // Initialize the post order vector
     this->post_order.resize(this->n_nodes, 0);
 
+    // initialize its value for the roots
+    // this is necessary in case the dag generated many detached dts
+    // in fact, without this, they will count from the same starting post-order and hence
+    // share some post-orders, which is wrong, since they are unique by definition
+    // this can be solved by initializing their initial post-order with their gamma_tilde,
+    // as if all them are children of a common parent
+    int gamma_tilde_root = 0;
+    for(int root : roots){
+        post_order[root] = gamma_tilde_root;
+        gamma_tilde_root += gamma[root];
+    }
+
     // Use the precomputed roots
     // Move them for performance reason since they won't be used anymore
     vector<int> Q = move(this->roots);
