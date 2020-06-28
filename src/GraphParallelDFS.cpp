@@ -171,11 +171,11 @@ void GraphParallelDFS::convertToDT() {
                     packaged_task<void(int, int)> task_child([this, &paths, &node_mutexes, &mP, &P, &Br](int index, int current_parent){
                         int child = this->Ai_dag[index];
 
-                        // existing path
-                        vector<int> Qr = paths[child];
-
                         // lock mutex to access shared resources (paths and incoming_edges)
                         node_mutexes[child].lock();
+
+                        // existing path
+                        vector<int> Qr = paths[child];
 
                         // update the path in the case in which
                         // - The path is empty, so this is the first time we meet this child
