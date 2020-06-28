@@ -10,5 +10,5 @@ find_package(Threads REQUIRED)
 
 include_directories(include)
 
-add_executable(parallel-dfs-dag src/main.cpp src/GraphParallelDFS.cpp)
+add_executable(parallel-dfs-dag src/main.cpp src/GraphParallelDFS.cpp src/Spinlock.cpp include/Spinlock.h)
 target_link_libraries(parallel-dfs-dag Threads::Threads)
