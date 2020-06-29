@@ -5,6 +5,7 @@
 #include <vector>
 #include <mutex>
 #include <future>
+#include "ThreadPool.h"
 
 using namespace std;
 
@@ -79,6 +80,10 @@ private:
 
     // contains all the parents of each node in the dag
     vector<vector<int>> parents_dag;
+
+    // thread pool to parallelize tasks
+    ThreadPool threadPool;
+
 };
 
 

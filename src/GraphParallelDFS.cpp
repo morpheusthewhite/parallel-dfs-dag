@@ -8,11 +8,14 @@
 #include "InvalidGraphInputFile.h"
 #include "OutputFileException.h"
 #include "GraphParallelDFS.h"
+#include "ThreadPool.h"
 
 using namespace std;
 using namespace std::chrono;
 
-GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0){
+GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0),
+threadPool(ThreadPool(thread::hardware_concurrency())){
+
     ifstream inputFile(filename);
     string buffer;
 
@@ -154,7 +157,7 @@ void GraphParallelDFS::convertToDT() {
 
         for(int node : Q){
             // create and launch a task for each node in Q
-            packaged_task<void(int)> task([this, &paths, &node_mutexes, &mP, &P](int node) {
+            future<void> fut = threadPool.enqueue([this, &paths, &node_mutexes, &mP, &P](int node) {
                 // iterate over the children of node
                 int first_child = this->Ap_dag[node] + 1;
                 int ending_child = this->Ap_dag[node + 1];
@@ -168,60 +171,51 @@ void GraphParallelDFS::convertToDT() {
 
                 // create and launch a task for each child of node
                 for(int i=first_child; i<ending_child; i++){
-                    packaged_task<void(int, int)> task_child([this, &paths, &node_mutexes, &mP, &P, &Br](int index, int current_parent){
-                        int child = this->Ai_dag[index];
+                    int child = this->Ai_dag[i];
 
-                        // lock mutex to access shared resources (paths and incoming_edges)
-                        node_mutexes[child].lock();
+                    // lock mutex to access shared resources (paths and incoming_edges)
+                    node_mutexes[child].lock();
 
-                        // existing path
-                        vector<int> Qr = paths[child];
+                    // existing path
+                    vector<int> Qr = paths[child];
 
-                        // update the path in the case in which
-                        // - The path is empty, so this is the first time we meet this child
-                        // - We found a path Br which is better than the current one
-                        if(Qr.empty() || Br <= Qr){
-                            paths[child] = Br;
+                    // update the path in the case in which
+                    // - The path is empty, so this is the first time we meet this child
+                    // - We found a path Br which is better than the current one
+                    if(Qr.empty() || Br <= Qr){
+                        paths[child] = Br;
 
-                            // the previous one, if existing, is a parent in the dag which is not present in the dt
-                            if(parents[child] != -1)
-                                this->parents_dag[child].push_back(parents[child]);
+                        // the previous one, if existing, is a parent in the dag which is not present in the dt
+                        if(parents[child] != -1)
+                            this->parents_dag[child].push_back(parents[child]);
 
-                            parents[child] = current_parent;
-                        } else {
-                            // the current parent is not part of the dt but it is actually part of the dag
-                            this->parents_dag[child].push_back(current_parent);
-                        }
+                        parents[child] = node;
+                    } else {
+                        // the current parent is not part of the dt but it is actually part of the dag
+                        this->parents_dag[child].push_back(node);
+                    }
 
-                        // decrement the count of incoming edges which needs to be visited yet for the node child
-                        int remaining = --(this->incoming_edges[child]);
+                    // decrement the count of incoming edges which needs to be visited yet for the node child
+                    int remaining = --(this->incoming_edges[child]);
 
-                        node_mutexes[child].unlock();
+                    node_mutexes[child].unlock();
 
-                        // if all incoming edges into this child have been visited, add it to P
-                        if(remaining == 0){
-                            mP.lock();
-                            P.push_back(child);
-                            mP.unlock();
-                        }
-                    });
-
-                    child_futures.push_back(move(task_child.get_future()));
-
-                    // actually launch task
-                    task_child(i, node);
+                    // if all incoming edges into this child have been visited, add it to P
+                    if(remaining == 0){
+                        mP.lock();
+                        P.push_back(child);
+                        mP.unlock();
+                    }
                 }
 
                 // wait for all children task to terminate
                 for(auto& child_future : child_futures)
                     child_future.get();
 
-            });
+            }, node);
 
-            node_futures.push_back(move(task.get_future()));
+            node_futures.push_back(move(fut));
 
-            // actually launch task
-            task(node);
         }
 
         // wait for all launched tasks to terminate
@@ -319,7 +313,7 @@ void GraphParallelDFS::computePostOrder() {
 
         for(int node : Q){
             // create and launch a task for each node in Q
-            packaged_task<void(int)> task([this, &mP, &P](int node) {
+            future<void> fut = threadPool.enqueue([this, &mP, &P](int node) {
                 int post = this->post_order[node];
 
                 int child_start = this->Ap_dt[node] + 1;
@@ -331,35 +325,22 @@ void GraphParallelDFS::computePostOrder() {
                 //iterate over the children of the current node
                 for(int i = child_start; i < child_end; i++){
                     // create and launch task for each child of the node
-                    packaged_task<void(int)> task_child([this, &post, &mP, &P](int index){
-                        int child = this->Ai_dt[index];
+                    int child = this->Ai_dt[i];
 
-                        // pre-compute post-order
-                        post_order[child] = post + this->gamma_tilde[child];
+                    // pre-compute post-order
+                    post_order[child] = post + this->gamma_tilde[child];
 
-                        // add child in P for the next iteration
-                        mP.lock();
-                        P.push_back(child);
-                        mP.unlock();
-                    });
-
-                    child_futures.push_back(move(task_child.get_future()));
-
-                    // launch task
-                    task_child(i);
+                    // add child in P for the next iteration
+                    mP.lock();
+                    P.push_back(child);
+                    mP.unlock();
                 }
-                // wait termination of child tasks
-                for(auto& child_future : child_futures)
-                    child_future.get();
 
                 // work out post-order of node
                 this->post_order[node] = post + this->gamma[node] -1;
-            });
+            }, node);
 
-            node_futures.push_back(move(task.get_future()));
-
-            // launch task
-            task(node);
+            node_futures.push_back(move(fut));
         }
 
         // wait termination of all the node tasks
@@ -410,7 +391,7 @@ void GraphParallelDFS::computeSubGraphSize(){
 
         for(int node : Q){
             // create and launch a task for each node in Q
-            packaged_task<void(int)> task([this, &mC, &C, &outgoing_edges_atomic](int node) {
+            future<void> fut = threadPool.enqueue([this, &mC, &C, &outgoing_edges_atomic](int node) {
 
                 // differently from the paper here it is not present another loop
                 // this because in the previous phase the DAG was converted to a
@@ -429,12 +410,9 @@ void GraphParallelDFS::computeSubGraphSize(){
                     }
                 }
 
-            });
+            }, node);
 
-            node_futures.push_back(move(task.get_future()));
-
-            // actually launch task
-            task(node);
+            node_futures.push_back(move(fut));
         }
 
         // wait for all launched tasks to terminate
@@ -446,7 +424,7 @@ void GraphParallelDFS::computeSubGraphSize(){
         for(int p : C) {
 
             // create and launch a task for each node in C
-            packaged_task<void(int)> task([this](int p) {
+            future<void> fut = threadPool.enqueue([this](int p) {
                 int first_child = Ap_dt[p] + 1;
                 int end_child = Ap_dt[p + 1];
 
@@ -464,12 +442,9 @@ void GraphParallelDFS::computeSubGraphSize(){
 
                 // count also p itself in the size of its subgraph
                 this->gamma[p]++;
-            });
+            }, p);
 
-            node_futures.push_back(move(task.get_future()));
-
-            // actually launch task
-            task(p);
+            node_futures.push_back(move(fut));
         }
 
         // wait for all launched tasks to terminate
@@ -524,7 +499,7 @@ void GraphParallelDFS::computeRanks(){
 
         for(int node : Q){
             // create and launch a task for each node in Q
-            packaged_task<void(int)> task([this, &outgoing, &mP, &P](int node) {
+            future<void> fut = this->threadPool.enqueue([this, &outgoing, &mP, &P](int node) {
                 // e_v is, for definition, the corresponding post order + 1
                 this->e_v[node] = this->post_order[node] + 1;
                 
@@ -581,13 +556,10 @@ void GraphParallelDFS::computeRanks(){
                         }
                     }
                 }
-            });
+            }, node);
 
-            node_futures.push_back(move(task.get_future()));
+            node_futures.push_back(move(fut));
             
-            // actually launch task
-            task(node);
-
         }
 
         // wait for all launched tasks to terminate
