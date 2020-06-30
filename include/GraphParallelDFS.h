@@ -5,8 +5,10 @@
 #include <vector>
 #include <mutex>
 #include <future>
+#include "taskflow/taskflow.hpp"
 
 using namespace std;
+using namespace tf;
 
 class GraphParallelDFS {
 public:
@@ -79,6 +81,8 @@ private:
 
     // contains all the parents of each node in the dag
     vector<vector<int>> parents_dag;
+
+    Executor executor;
 };
 
 

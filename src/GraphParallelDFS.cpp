@@ -8,11 +8,14 @@
 #include "InvalidGraphInputFile.h"
 #include "OutputFileException.h"
 #include "GraphParallelDFS.h"
+#include "taskflow/taskflow.hpp"
 
 using namespace std;
 using namespace std::chrono;
+using namespace tf;
 
-GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0){
+GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0) {
+
     ifstream inputFile(filename);
     string buffer;
 
@@ -140,21 +143,21 @@ void GraphParallelDFS::convertToDT() {
     // mutex for protecting P
     mutex mP;
 
-    // vector to collect all the node futures
-    vector<future<void>> node_futures;
-
     vector<int> P;
 
     // store the list of the parents in the dag for each node except the one in the dt
     this->parents_dag.resize(n_nodes);
 
-    while(!Q.empty()){
-        node_futures.clear();
-        P = vector<int>();
+    // create taskflow objects
+    Taskflow taskflow;
 
-        for(int node : Q){
+    while(!Q.empty()){
+        P = vector<int>();
+        taskflow.clear();
+
+        for(int node : Q) {
             // create and launch a task for each node in Q
-            packaged_task<void(int)> task([this, &paths, &node_mutexes, &mP, &P](int node) {
+            taskflow.emplace([this, &paths, &node_mutexes, &mP, &P, node]() {
                 // iterate over the children of node
                 int first_child = this->Ap_dag[node] + 1;
                 int ending_child = this->Ap_dag[node + 1];
@@ -167,66 +170,48 @@ void GraphParallelDFS::convertToDT() {
                 vector<future<void>> child_futures;
 
                 // create and launch a task for each child of node
-                for(int i=first_child; i<ending_child; i++){
-                    packaged_task<void(int, int)> task_child([this, &paths, &node_mutexes, &mP, &P, &Br](int index, int current_parent){
-                        int child = this->Ai_dag[index];
+                for (int i = first_child; i < ending_child; i++) {
+                    int child = this->Ai_dag[i];
 
-                        // lock mutex to access shared resources (paths and incoming_edges)
-                        node_mutexes[child].lock();
+                    // lock mutex to access shared resources (paths and incoming_edges)
+                    node_mutexes[child].lock();
 
-                        // existing path
-                        vector<int> Qr = paths[child];
+                    // existing path
+                    vector<int> Qr = paths[child];
 
-                        // update the path in the case in which
-                        // - The path is empty, so this is the first time we meet this child
-                        // - We found a path Br which is better than the current one
-                        if(Qr.empty() || Br <= Qr){
-                            paths[child] = Br;
+                    // update the path in the case in which
+                    // - The path is empty, so this is the first time we meet this child
+                    // - We found a path Br which is better than the current one
+                    if (Qr.empty() || Br <= Qr) {
+                        paths[child] = Br;
 
-                            // the previous one, if existing, is a parent in the dag which is not present in the dt
-                            if(parents[child] != -1)
-                                this->parents_dag[child].push_back(parents[child]);
+                        // the previous one, if existing, is a parent in the dag which is not present in the dt
+                        if (parents[child] != -1)
+                            this->parents_dag[child].push_back(parents[child]);
 
-                            parents[child] = current_parent;
-                        } else {
-                            // the current parent is not part of the dt but it is actually part of the dag
-                            this->parents_dag[child].push_back(current_parent);
-                        }
+                        parents[child] = node;
+                    } else {
+                        // the current parent is not part of the dt but it is actually part of the dag
+                        this->parents_dag[child].push_back(node);
+                    }
 
-                        // decrement the count of incoming edges which needs to be visited yet for the node child
-                        int remaining = --(this->incoming_edges[child]);
+                    // decrement the count of incoming edges which needs to be visited yet for the node child
+                    int remaining = --(this->incoming_edges[child]);
 
-                        node_mutexes[child].unlock();
+                    node_mutexes[child].unlock();
 
-                        // if all incoming edges into this child have been visited, add it to P
-                        if(remaining == 0){
-                            mP.lock();
-                            P.push_back(child);
-                            mP.unlock();
-                        }
-                    });
-
-                    child_futures.push_back(move(task_child.get_future()));
-
-                    // actually launch task
-                    task_child(i, node);
+                    // if all incoming edges into this child have been visited, add it to P
+                    if (remaining == 0) {
+                        mP.lock();
+                        P.push_back(child);
+                        mP.unlock();
+                    }
                 }
-
-                // wait for all children task to terminate
-                for(auto& child_future : child_futures)
-                    child_future.get();
-
             });
-
-            node_futures.push_back(move(task.get_future()));
-
-            // actually launch task
-            task(node);
         }
 
-        // wait for all launched tasks to terminate
-        for(auto& node_future : node_futures)
-            node_future.get();
+        executor.run(taskflow);
+        executor.wait_for_all();
 
         // move all content of P to Q
         Q = move(P);
@@ -308,18 +293,16 @@ void GraphParallelDFS::computePostOrder() {
     //mutex which protect P vector modifications
     mutex mP;
 
-    // prepare vector of future for tasks
-    vector<future<void>> node_futures;
+    Taskflow taskflow;
 
     while(!Q.empty()){
-        // clear the vector of future
-        node_futures.clear();
 
         vector<int> P;
+        taskflow.clear();
 
         for(int node : Q){
             // create and launch a task for each node in Q
-            packaged_task<void(int)> task([this, &mP, &P](int node) {
+            taskflow.emplace([this, &mP, &P, node]() {
                 int post = this->post_order[node];
 
                 int child_start = this->Ap_dt[node] + 1;
@@ -331,40 +314,24 @@ void GraphParallelDFS::computePostOrder() {
                 //iterate over the children of the current node
                 for(int i = child_start; i < child_end; i++){
                     // create and launch task for each child of the node
-                    packaged_task<void(int)> task_child([this, &post, &mP, &P](int index){
-                        int child = this->Ai_dt[index];
+                    int child = this->Ai_dt[i];
 
-                        // pre-compute post-order
-                        post_order[child] = post + this->gamma_tilde[child];
+                    // pre-compute post-order
+                    post_order[child] = post + this->gamma_tilde[child];
 
-                        // add child in P for the next iteration
-                        mP.lock();
-                        P.push_back(child);
-                        mP.unlock();
-                    });
-
-                    child_futures.push_back(move(task_child.get_future()));
-
-                    // launch task
-                    task_child(i);
+                    // add child in P for the next iteration
+                    mP.lock();
+                    P.push_back(child);
+                    mP.unlock();
                 }
-                // wait termination of child tasks
-                for(auto& child_future : child_futures)
-                    child_future.get();
 
                 // work out post-order of node
                 this->post_order[node] = post + this->gamma[node] -1;
             });
 
-            node_futures.push_back(move(task.get_future()));
-
-            // launch task
-            task(node);
         }
-
-        // wait termination of all the node tasks
-        for(auto& node_future : node_futures)
-            node_future.get();
+        executor.run(taskflow);
+        executor.wait_for_all();
 
         // move P in Q for the following iteration
         Q = move(P);
@@ -401,16 +368,15 @@ void GraphParallelDFS::computeSubGraphSize(){
     for(int i=0; i<n_nodes; i++)
         outgoing_edges_atomic[i].store(this->outgoing_edges[i]);
 
-    // vector to collect all the node futures
-    vector<future<void>> node_futures;
+    Taskflow taskflow;
 
     while(!Q.empty()){
-        node_futures.clear();
         C = vector<int>();
+        taskflow.clear();
 
         for(int node : Q){
             // create and launch a task for each node in Q
-            packaged_task<void(int)> task([this, &mC, &C, &outgoing_edges_atomic](int node) {
+            taskflow.emplace([this, &mC, &C, &outgoing_edges_atomic, node]() {
 
                 // differently from the paper here it is not present another loop
                 // this because in the previous phase the DAG was converted to a
@@ -430,23 +396,17 @@ void GraphParallelDFS::computeSubGraphSize(){
                 }
 
             });
-
-            node_futures.push_back(move(task.get_future()));
-
-            // actually launch task
-            task(node);
         }
 
-        // wait for all launched tasks to terminate
-        for(auto& node_future : node_futures)
-            node_future.get();
+        executor.run(taskflow);
+        executor.wait_for_all();
 
-        node_futures.clear();
-
+        taskflow.clear();
+        
         for(int p : C) {
 
             // create and launch a task for each node in C
-            packaged_task<void(int)> task([this](int p) {
+            taskflow.emplace([this, p]() {
                 int first_child = Ap_dt[p] + 1;
                 int end_child = Ap_dt[p + 1];
 
@@ -466,15 +426,10 @@ void GraphParallelDFS::computeSubGraphSize(){
                 this->gamma[p]++;
             });
 
-            node_futures.push_back(move(task.get_future()));
-
-            // actually launch task
-            task(p);
         }
 
-        // wait for all launched tasks to terminate
-        for(auto& node_future : node_futures)
-            node_future.get();
+        executor.run(taskflow);
+        executor.wait_for_all();
 
         // move all content of C to Q
         Q = move(C);
@@ -501,9 +456,6 @@ void GraphParallelDFS::computeRanks(){
     // move leaves since they won't be used anymore
     vector<int> Q;
     
-    // list to collect children futures
-    vector<future<void>> node_futures;
-
     // initialize vector of atomic variables with the precomputed outgoing_edges
     // calculate also leaves of the dag
     vector<atomic_int> outgoing(this->n_nodes);
@@ -518,81 +470,78 @@ void GraphParallelDFS::computeRanks(){
             Q.push_back(i);
     }
 
+    Taskflow taskflow;
+
     while(!Q.empty()){
         P = vector<int>();
-        node_futures.clear();
+        taskflow.clear();
 
         for(int node : Q){
             // create and launch a task for each node in Q
-            packaged_task<void(int)> task([this, &outgoing, &mP, &P](int node) {
-                // e_v is, for definition, the corresponding post order + 1
-                this->e_v[node] = this->post_order[node] + 1;
-                
-                int first_child = Ap_dag[node] + 1;
-                int end_child = Ap_dag[node + 1];
+            taskflow.emplace([this, &outgoing, &mP, &P, node]() {
+            // e_v is, for definition, the corresponding post order + 1
+            this->e_v[node] = this->post_order[node] + 1;
 
-                if(first_child == end_child){
-                    // this is a leaf so e_v and s_v will correspond
-                    s_v[node] = e_v[node];
-                } else {
-                    // iterate over children of node
-                    int min = INT_MAX;
+            int first_child = Ap_dag[node] + 1;
+            int end_child = Ap_dag[node + 1];
 
-                    // we compute the s_v in this case as the minimum of the s_v of the children
-                    // since they s_v is:
-                    // - equal to e_v in case they are a leaf
-                    // - equal to the mimimum of the s_v of the children otherwise
-                    for (int i = first_child; i < end_child; i++) {
-                        // no parallelization in this cycle: min should be protected in that case
-                        // which would reduce the benefits of the parallelization, considering also that
-                        // the actual parallelizable content of the cycle is almost none
-                        int child = Ai_dag[i];
+            if(first_child == end_child){
+                // this is a leaf so e_v and s_v will correspond
+                s_v[node] = e_v[node];
+            } else {
+                // iterate over children of node
+                int min = INT_MAX;
 
-                        // once here we visited the children of the node node
-                        if(this->s_v[child] < min) min = s_v[child];
-                    }
+                // we compute the s_v in this case as the minimum of the s_v of the children
+                // since they s_v is:
+                // - equal to e_v in case they are a leaf
+                // - equal to the mimimum of the s_v of the children otherwise
+                for (int i = first_child; i < end_child; i++) {
+                    // no parallelization in this cycle: min should be protected in that case
+                    // which would reduce the benefits of the parallelization, considering also that
+                    // the actual parallelizable content of the cycle is almost none
+                    int child = Ai_dag[i];
 
-                    s_v[node] = min;
+                    // once here we visited the children of the node node
+                    if(this->s_v[child] < min) min = s_v[child];
                 }
 
-                // update the count of the visited outgoing edges for the parentS of the current node
-                // 1. first consider the parent in the dt
+                s_v[node] = min;
+            }
 
-                int parent_dt = this->parents[node];
-                // NOTE: root nodes will never enter this condition
-                if(parent_dt != -1){
-                    int remaining = outgoing[parent_dt].fetch_sub(1);
-                    // check that no more children (of the dt parent) needs to be visited yet
+            // update the count of the visited outgoing edges for the parentS of the current node
+            // 1. first consider the parent in the dt
+
+            int parent_dt = this->parents[node];
+            // NOTE: root nodes will never enter this condition
+            if(parent_dt != -1){
+                int remaining = outgoing[parent_dt].fetch_sub(1);
+                // check that no more children (of the dt parent) needs to be visited yet
+                if(remaining == 1){
+                    mP.lock();
+                    P.push_back(parent_dt);
+                    mP.unlock();
+                }
+
+                // 2. then consider the parent(s) in the dag except the one from in the dt (already considered)
+                for(int parent : parents_dag[node]){
+                    remaining = outgoing[parent].fetch_sub(1);
+
+                    // check that no more children (of this parent) needs to be visited yet
                     if(remaining == 1){
                         mP.lock();
-                        P.push_back(parent_dt);
+                        P.push_back(parent);
                         mP.unlock();
                     }
-
-                    // 2. then consider the parent(s) in the dag except the one from in the dt (already considered)
-                    for(int parent : parents_dag[node]){
-                        remaining = outgoing[parent].fetch_sub(1);
-
-                        // check that no more children (of this parent) needs to be visited yet
-                        if(remaining == 1){
-                            mP.lock();
-                            P.push_back(parent);
-                            mP.unlock();
-                        }
-                    }
                 }
+            }
             });
-
-            node_futures.push_back(move(task.get_future()));
-            
-            // actually launch task
-            task(node);
 
         }
 
         // wait for all launched tasks to terminate
-        for(auto& node_future : node_futures)
-            node_future.get();
+        executor.run(taskflow);
+        executor.wait_for_all();
 
         // move all content of P to Q
         Q = move(P);
