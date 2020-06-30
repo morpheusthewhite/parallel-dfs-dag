@@ -161,7 +161,11 @@ void GraphParallelDFS::convertToDT() {
 
                 // path to the current node with node itself (used in child for comparison)
                 vector<int> Br = paths[node];
-                Br.push_back(node);
+
+                // check that node has more than 1 child before adding it to the path
+                // otherwise it will never be a decision point for the path selection
+                if(first_child != ending_child)
+                    Br.push_back(node);
 
                 // vector to collect children futures; needed to wait on them
                 vector<future<void>> child_futures;
@@ -527,7 +531,7 @@ void GraphParallelDFS::computeRanks(){
             packaged_task<void(int)> task([this, &outgoing, &mP, &P](int node) {
                 // e_v is, for definition, the corresponding post order + 1
                 this->e_v[node] = this->post_order[node] + 1;
-                
+
                 int first_child = Ap_dag[node] + 1;
                 int end_child = Ap_dag[node + 1];
 
@@ -584,7 +588,7 @@ void GraphParallelDFS::computeRanks(){
             });
 
             node_futures.push_back(move(task.get_future()));
-            
+
             // actually launch task
             task(node);
 
