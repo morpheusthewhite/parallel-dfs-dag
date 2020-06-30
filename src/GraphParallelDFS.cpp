@@ -164,7 +164,11 @@ void GraphParallelDFS::convertToDT() {
 
                 // path to the current node with node itself (used in child for comparison)
                 vector<int> Br = paths[node];
-                Br.push_back(node);
+
+                // check that node has more than 1 child before adding it to the path
+                // otherwise it will never be a decision point for the path selection
+                if(first_child != ending_child)
+                    Br.push_back(node);
 
                 // vector to collect children futures; needed to wait on them
                 vector<future<void>> child_futures;
