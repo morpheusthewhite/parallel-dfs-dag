@@ -186,7 +186,7 @@ void GraphParallelDFS::convertToDT() {
                     // update the path in the case in which
                     // - The path is empty, so this is the first time we meet this child
                     // - We found a path Br which is better than the current one
-                    if (Qr.empty() || Br <= Qr) {
+                    if (this->parents[child] == -1 || Br <= Qr) {
                         paths[child] = Br;
 
                         // the previous one, if existing, is a parent in the dag which is not present in the dt
