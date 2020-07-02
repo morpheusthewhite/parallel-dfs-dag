@@ -9,10 +9,12 @@
 #include "OutputFileException.h"
 #include "GraphParallelDFS.h"
 
+
 using namespace std;
 using namespace std::chrono;
 
-GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0){
+GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0) {
+
     ifstream inputFile(filename);
     string buffer;
 
@@ -140,40 +142,54 @@ void GraphParallelDFS::convertToDT() {
     // mutex for protecting P
     mutex mP;
 
-    // vector to collect all the node futures
-    vector<future<void>> node_futures;
-
     vector<int> P;
 
     // store the list of the parents in the dag for each node except the one in the dt
     this->parents_dag.resize(n_nodes);
 
-    while(!Q.empty()){
-        node_futures.clear();
+    vector<future<void>> futures;
+
+    while(!Q.empty()) {
         P = vector<int>();
+        futures.clear();
 
-        for(int node : Q){
-            // create and launch a task for each node in Q
-            packaged_task<void(int)> task([this, &paths, &node_mutexes, &mP, &P](int node) {
-                // iterate over the children of node
-                int first_child = this->Ap_dag[node] + 1;
-                int ending_child = this->Ap_dag[node + 1];
+        // work out iteration to give to the threads
+        int totalSize = Q.size();
+        int nThreads = thread::hardware_concurrency();
+        // check the dimension of the vector
+        if (totalSize < nThreads) {
+            nThreads = totalSize;
+        }
+        int threadPortion = totalSize / nThreads;
+        int lastPortion = totalSize - (threadPortion * nThreads);
 
-                // path to the current node with node itself (used in child for comparison)
-                vector<int> Br = paths[node];
+        for (int thIndex = 0; thIndex < nThreads; thIndex++) {
+            future<void> f = async([this, &paths, &node_mutexes, &mP, &P, &threadPortion, &lastPortion, &nThreads, &Q, thIndex]() {
 
-                // check that node has more than 1 child before adding it to the path
-                // otherwise it will never be a decision point for the path selection
-                if(first_child != ending_child)
-                    Br.push_back(node);
+                // calculate end index on Q: if this is the last thread then it will take care of the remaining portion
+                int max = (thIndex == (nThreads - 1)) ? ((thIndex + 1) * threadPortion + lastPortion) : (threadPortion * (thIndex + 1));
 
-                // vector to collect children futures; needed to wait on them
-                vector<future<void>> child_futures;
+                for (int i = threadPortion * thIndex; i < max; i++) {
 
-                // create and launch a task for each child of node
-                for(int i=first_child; i<ending_child; i++){
-                    packaged_task<void(int, int)> task_child([this, &paths, &node_mutexes, &mP, &P, &Br](int index, int current_parent){
-                        int child = this->Ai_dag[index];
+                    int node = Q[i];
+                    // iterate over the children of node
+                    int first_child = this->Ap_dag[node] + 1;
+                    int ending_child = this->Ap_dag[node + 1];
+
+                    // path to the current node with node itself (used in child for comparison)
+                    vector<int> Br = paths[node];
+
+                    // check that node has more than 1 child before adding it to the path
+                    // otherwise it will never be a decision point for the path selection
+                    if (first_child != ending_child)
+                        Br.push_back(node);
+
+                    // vector to collect children futures; needed to wait on them
+                    vector<future<void>> child_futures;
+
+                    // create and launch a task for each child of node
+                    for (int i = first_child; i < ending_child; i++) {
+                        int child = this->Ai_dag[i];
 
                         // lock mutex to access shared resources (paths and incoming_edges)
                         node_mutexes[child].lock();
@@ -184,17 +200,17 @@ void GraphParallelDFS::convertToDT() {
                         // update the path in the case in which
                         // - The path is empty, so this is the first time we meet this child
                         // - We found a path Br which is better than the current one
-                        if(Qr.empty() || Br <= Qr){
+                        if (Qr.empty() || Br <= Qr) {
                             paths[child] = Br;
 
                             // the previous one, if existing, is a parent in the dag which is not present in the dt
-                            if(parents[child] != -1)
+                            if (parents[child] != -1)
                                 this->parents_dag[child].push_back(parents[child]);
 
-                            parents[child] = current_parent;
+                            parents[child] = node;
                         } else {
                             // the current parent is not part of the dt but it is actually part of the dag
-                            this->parents_dag[child].push_back(current_parent);
+                            this->parents_dag[child].push_back(node);
                         }
 
                         // decrement the count of incoming edges which needs to be visited yet for the node child
@@ -203,34 +219,21 @@ void GraphParallelDFS::convertToDT() {
                         node_mutexes[child].unlock();
 
                         // if all incoming edges into this child have been visited, add it to P
-                        if(remaining == 0){
+                        if (remaining == 0) {
                             mP.lock();
                             P.push_back(child);
                             mP.unlock();
                         }
-                    });
-
-                    child_futures.push_back(move(task_child.get_future()));
-
-                    // actually launch task
-                    task_child(i, node);
+                    }
                 }
-
-                // wait for all children task to terminate
-                for(auto& child_future : child_futures)
-                    child_future.get();
-
             });
-
-            node_futures.push_back(move(task.get_future()));
-
-            // actually launch task
-            task(node);
+            futures.push_back(move(f));
         }
 
-        // wait for all launched tasks to terminate
-        for(auto& node_future : node_futures)
-            node_future.get();
+        // run all the tasks and wait for them
+        for(auto& f : futures){
+            f.get();
+        }
 
         // move all content of P to Q
         Q = move(P);
@@ -312,31 +315,43 @@ void GraphParallelDFS::computePostOrder() {
     //mutex which protect P vector modifications
     mutex mP;
 
-    // prepare vector of future for tasks
-    vector<future<void>> node_futures;
+    vector<future<void>> futures;
 
     while(!Q.empty()){
-        // clear the vector of future
-        node_futures.clear();
 
         vector<int> P;
+        futures.clear();
 
-        for(int node : Q){
+        // work out iteration to give to the threads
+        int totalSize = Q.size();
+        int nThreads = thread::hardware_concurrency();
+        // check the dimension of the vector
+        if (totalSize < nThreads) {
+            nThreads = totalSize;
+        }
+        int threadPortion = totalSize / nThreads;
+        int lastPortion = totalSize - (threadPortion * nThreads);
+
+        for (int thIndex = 0; thIndex < nThreads; thIndex++) {
             // create and launch a task for each node in Q
-            packaged_task<void(int)> task([this, &mP, &P](int node) {
-                int post = this->post_order[node];
+                future<void> f = async([this, &mP, &P, &threadPortion, &nThreads, &Q, &lastPortion, thIndex]() {
 
-                int child_start = this->Ap_dt[node] + 1;
-                int child_end = this->Ap_dt[node + 1];
+                // calculate end index on Q: if this is the last thread then it will take care of the remaining portion
+                int max = (thIndex == (nThreads - 1)) ? ((thIndex + 1) * threadPortion + lastPortion) : (threadPortion * (thIndex + 1));
+                for (int i = threadPortion * thIndex; i < max; i++) {
+                    int node = Q[i];
+                    int post = this->post_order[node];
 
-                // vector which collect the children futures
-                vector<future<void>> child_futures;
+                    int child_start = this->Ap_dt[node] + 1;
+                    int child_end = this->Ap_dt[node + 1];
 
-                //iterate over the children of the current node
-                for(int i = child_start; i < child_end; i++){
-                    // create and launch task for each child of the node
-                    packaged_task<void(int)> task_child([this, &post, &mP, &P](int index){
-                        int child = this->Ai_dt[index];
+                    // vector which collect the children futures
+                    vector<future<void>> child_futures;
+
+                    //iterate over the children of the current node
+                    for (int i = child_start; i < child_end; i++) {
+                        // create and launch task for each child of the node
+                        int child = this->Ai_dt[i];
 
                         // pre-compute post-order
                         post_order[child] = post + this->gamma_tilde[child];
@@ -345,30 +360,18 @@ void GraphParallelDFS::computePostOrder() {
                         mP.lock();
                         P.push_back(child);
                         mP.unlock();
-                    });
+                    }
 
-                    child_futures.push_back(move(task_child.get_future()));
-
-                    // launch task
-                    task_child(i);
+                    // work out post-order of node
+                    this->post_order[node] = post + this->gamma[node] - 1;
                 }
-                // wait termination of child tasks
-                for(auto& child_future : child_futures)
-                    child_future.get();
-
-                // work out post-order of node
-                this->post_order[node] = post + this->gamma[node] -1;
             });
-
-            node_futures.push_back(move(task.get_future()));
-
-            // launch task
-            task(node);
+            futures.push_back(move(f));
         }
 
-        // wait termination of all the node tasks
-        for(auto& node_future : node_futures)
-            node_future.get();
+        for(auto& f : futures){
+            f.get();
+        }
 
         // move P in Q for the following iteration
         Q = move(P);
@@ -405,80 +408,107 @@ void GraphParallelDFS::computeSubGraphSize(){
     for(int i=0; i<n_nodes; i++)
         outgoing_edges_atomic[i].store(this->outgoing_edges[i]);
 
-    // vector to collect all the node futures
-    vector<future<void>> node_futures;
+    vector<future<void>> futures;
 
     while(!Q.empty()){
-        node_futures.clear();
         C = vector<int>();
 
-        for(int node : Q){
+        futures.clear();
+
+        // work out iteration to give to the threads
+        int totalSize = Q.size();
+        int nThreads = thread::hardware_concurrency();
+        // check the dimension of the vector
+        if (totalSize < nThreads) {
+            nThreads = totalSize;
+        }
+        int threadPortion = totalSize / nThreads;
+        int lastPortion = totalSize - (threadPortion * nThreads);
+
+        for (int thIndex = 0; thIndex < nThreads; thIndex++) {
             // create and launch a task for each node in Q
-            packaged_task<void(int)> task([this, &mC, &C, &outgoing_edges_atomic](int node) {
+            future<void> f = async([this, &mC, &C, &outgoing_edges_atomic, &threadPortion, &lastPortion, &nThreads, &Q, thIndex]() {
 
-                // differently from the paper here it is not present another loop
-                // this because in the previous phase the DAG was converted to a
-                // directed tree, hence each node will have at most one parent
-                int parent = this->parents[node];
+                // calculate end index on Q: if this is the last thread then it will take care of the remaining portion
+                int max = (thIndex == (nThreads - 1)) ? ((thIndex + 1) * threadPortion + lastPortion) : (threadPortion * (thIndex + 1));
+                for (int i = threadPortion * thIndex; i < max; i++) {
+                    int node = Q[i];
+                    // differently from the paper here it is not present another loop
+                    // this because in the previous phase the DAG was converted to a
+                    // directed tree, hence each node will have at most one parent
+                    int parent = this->parents[node];
 
-                // verify that it has actually a parent, i. e. it is not -1
-                if(parent != -1){
+                    // verify that it has actually a parent, i. e. it is not -1
+                    if (parent != -1) {
 
-                    // check if no more outgoing edges needs to be visited yet
-                    // note: fetch_sub returns the previous value
-                    if(outgoing_edges_atomic[parent].fetch_sub(1) == 1){
-                        mC.lock();
-                        C.push_back(parent);
-                        mC.unlock();
+                        // check if no more outgoing edges needs to be visited yet
+                        // note: fetch_sub returns the previous value
+                        if (outgoing_edges_atomic[parent].fetch_sub(1) == 1) {
+                            mC.lock();
+                            C.push_back(parent);
+                            mC.unlock();
+                        }
                     }
                 }
-
             });
-
-            node_futures.push_back(move(task.get_future()));
-
-            // actually launch task
-            task(node);
+            futures.push_back(move(f));
         }
 
-        // wait for all launched tasks to terminate
-        for(auto& node_future : node_futures)
-            node_future.get();
+        // wait for the tasks
+        for(auto& f : futures){
+            f.get();
+        }
 
-        node_futures.clear();
+        futures.clear();
 
-        for(int p : C) {
+        // work out iteration to give to the threads
+        nThreads = thread::hardware_concurrency();
+        totalSize = C.size();
+        // check the dimension of the vector
+        if (totalSize < nThreads) {
+            nThreads = totalSize;
+        }
 
+        if(nThreads){
+            threadPortion = totalSize / nThreads;
+            lastPortion = totalSize - (threadPortion * nThreads);
+        }
+
+        for (int thIndex = 0; thIndex < nThreads; thIndex++) {
             // create and launch a task for each node in C
-            packaged_task<void(int)> task([this](int p) {
-                int first_child = Ap_dt[p] + 1;
-                int end_child = Ap_dt[p + 1];
+            future<void> f = async([this, &threadPortion, &lastPortion, &nThreads, &C, thIndex]() {
 
-                // order children of P
-                // no race condition since each task will operate on a different section of Ai_dt
-                sort(this->Ai_dt.begin() + first_child, this->Ai_dt.begin() + end_child);
+                // calculate end index on Q: if this is the last thread then it will take care of the remaining portion
+                int max = (thIndex == (nThreads - 1)) ? ((thIndex + 1) * threadPortion + lastPortion) : (threadPortion * (thIndex + 1));
+                for (int i = threadPortion * thIndex; i < max; i++) {
+                    int p = C[i];
 
-                // iterate over children of P
-                for (int i = first_child; i < end_child; i++) {
-                    int child = Ai_dt[i];
+                    int first_child = Ap_dt[p] + 1;
+                    int end_child = Ap_dt[p + 1];
 
-                    this->gamma_tilde[child] = gamma[p];
-                    this->gamma[p] += gamma[child];
+                    // order children of P
+                    // no race condition since each task will operate on a different section of Ai_dt
+                    sort(this->Ai_dt.begin() + first_child, this->Ai_dt.begin() + end_child);
+
+                    // iterate over children of P
+                    for (int i = first_child; i < end_child; i++) {
+                        int child = Ai_dt[i];
+
+                        this->gamma_tilde[child] = gamma[p];
+                        this->gamma[p] += gamma[child];
+                    }
+
+                    // count also p itself in the size of its subgraph
+                    this->gamma[p]++;
                 }
-
-                // count also p itself in the size of its subgraph
-                this->gamma[p]++;
             });
-
-            node_futures.push_back(move(task.get_future()));
-
-            // actually launch task
-            task(p);
+            futures.push_back(move(f));
         }
 
-        // wait for all launched tasks to terminate
-        for(auto& node_future : node_futures)
-            node_future.get();
+        // run all the tasks and wait for them
+        for(auto& f : futures){
+            f.get();
+        }
 
         // move all content of C to Q
         Q = move(C);
@@ -498,15 +528,12 @@ void GraphParallelDFS::computeRanks(){
     this->s_v.resize(this->n_nodes);
 
     vector<int> P;
-    
+
     // mutex to protect P modifications
     mutex mP;
-    
+
     // move leaves since they won't be used anymore
     vector<int> Q;
-    
-    // list to collect children futures
-    vector<future<void>> node_futures;
 
     // initialize vector of atomic variables with the precomputed outgoing_edges
     // calculate also leaves of the dag
@@ -514,7 +541,7 @@ void GraphParallelDFS::computeRanks(){
     for(int i=0; i<this->n_nodes; i++){
         int start_child = this->Ap_dag[i] + 1;
         int end_child = this->Ap_dag[i+1];
-        
+
         int n_children = end_child - start_child;
         outgoing[i].store(n_children);
 
@@ -522,20 +549,39 @@ void GraphParallelDFS::computeRanks(){
             Q.push_back(i);
     }
 
+    vector<future<void>> futures;
+
     while(!Q.empty()){
         P = vector<int>();
-        node_futures.clear();
 
-        for(int node : Q){
+        futures.clear();
+
+        // work out iteration to give to the threads
+        int totalSize = Q.size();
+        int nThreads = thread::hardware_concurrency();
+        // check the dimension of the vector
+        if (totalSize < nThreads) {
+            nThreads = totalSize;
+        }
+        int threadPortion = totalSize / nThreads;
+        int lastPortion = totalSize - (threadPortion * nThreads);
+
+        for (int thIndex = 0; thIndex < nThreads; thIndex++) {
             // create and launch a task for each node in Q
-            packaged_task<void(int)> task([this, &outgoing, &mP, &P](int node) {
+            future<void> f = async([this, &outgoing, &mP, &P, &threadPortion, &lastPortion, &nThreads, &Q, thIndex]() {
+
+            // calculate end index on Q: if this is the last thread then it will take care of the remaining portion
+            int max = (thIndex == (nThreads - 1)) ? ((thIndex + 1) * threadPortion + lastPortion) : (threadPortion * (thIndex + 1));
+            for (int i = threadPortion * thIndex; i < max; i++) {
+                int node = Q[i];
+
                 // e_v is, for definition, the corresponding post order + 1
                 this->e_v[node] = this->post_order[node] + 1;
 
                 int first_child = Ap_dag[node] + 1;
                 int end_child = Ap_dag[node + 1];
 
-                if(first_child == end_child){
+                if (first_child == end_child) {
                     // this is a leaf so e_v and s_v will correspond
                     s_v[node] = e_v[node];
                 } else {
@@ -553,7 +599,7 @@ void GraphParallelDFS::computeRanks(){
                         int child = Ai_dag[i];
 
                         // once here we visited the children of the node node
-                        if(this->s_v[child] < min) min = s_v[child];
+                        if (this->s_v[child] < min) min = s_v[child];
                     }
 
                     s_v[node] = min;
@@ -564,39 +610,36 @@ void GraphParallelDFS::computeRanks(){
 
                 int parent_dt = this->parents[node];
                 // NOTE: root nodes will never enter this condition
-                if(parent_dt != -1){
+                if (parent_dt != -1) {
                     int remaining = outgoing[parent_dt].fetch_sub(1);
                     // check that no more children (of the dt parent) needs to be visited yet
-                    if(remaining == 1){
+                    if (remaining == 1) {
                         mP.lock();
                         P.push_back(parent_dt);
                         mP.unlock();
                     }
 
                     // 2. then consider the parent(s) in the dag except the one from in the dt (already considered)
-                    for(int parent : parents_dag[node]){
+                    for (int parent : parents_dag[node]) {
                         remaining = outgoing[parent].fetch_sub(1);
 
                         // check that no more children (of this parent) needs to be visited yet
-                        if(remaining == 1){
+                        if (remaining == 1) {
                             mP.lock();
                             P.push_back(parent);
                             mP.unlock();
                         }
                     }
                 }
-            });
-
-            node_futures.push_back(move(task.get_future()));
-
-            // actually launch task
-            task(node);
-
+            }
+          });
+          futures.push_back(move(f));
         }
 
         // wait for all launched tasks to terminate
-        for(auto& node_future : node_futures)
-            node_future.get();
+        for(auto& f : futures){
+            f.get();
+        }
 
         // move all content of P to Q
         Q = move(P);
@@ -624,7 +667,7 @@ void GraphParallelDFS::saveTo(const string& filename){
     if(!outputFile.is_open()){
         throw OutputFileException();
     }
-    
+
     outputFile << *this;
 }
 
