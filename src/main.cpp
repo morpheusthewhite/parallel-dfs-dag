@@ -7,7 +7,7 @@ using namespace std;
 
 int main(int argc, char * argv[]){
     if(argc < 3){
-        cout << "Usage: input_file output_file";
+        cout << "Usage: input_file output_file" << endl;
         return 1;
     }
 
