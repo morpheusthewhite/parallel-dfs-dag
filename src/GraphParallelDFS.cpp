@@ -35,6 +35,7 @@ GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0) {
     //check the validity of the number of nodes
     if(this->n_nodes > 0){
         this->incoming_edges.resize(n_nodes);
+        this->Ap_dag.resize(n_nodes);
     }else{
         throw InvalidGraphInputFile("Number of node in the graph not valid");
     }
@@ -44,11 +45,15 @@ GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0) {
         char c_buffer;
         istringstream stream(buffer);
 
-        // save node index in Ap
-        this->Ap_dag.push_back(this->Ai_dag.size());
-
         // read the first node
         stream >> node;
+
+        if(node >= n_nodes)
+           throw InvalidGraphInputFile("Number of node in the graph not valid");
+
+        // save node index in Ap
+        this->Ap_dag[node] = this->Ai_dag.size();
+
         this->Ai_dag.push_back(node);
 
         while(stream >> c_buffer && c_buffer != '#'){
