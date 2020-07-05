@@ -45,28 +45,29 @@ GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0) {
         char c_buffer;
         istringstream stream(buffer);
 
-        // read the first node
+        // read the first node number in the line
         stream >> node;
 
         if(node >= n_nodes)
            throw InvalidGraphInputFile("Number of node in the graph not valid");
 
-        // save node index in Ap
+        // save node index (starting position in Ai) in Ap
         this->Ap_dag[node] = this->Ai_dag.size();
 
+        // add the node itself in Ai
         this->Ai_dag.push_back(node);
 
         while(stream >> c_buffer && c_buffer != '#'){
             if(isdigit(c_buffer)){
                 int child;
-                //go one position back to read the number
+                // go one position back to read the entire number
                 int pos = stream.tellg();
                 stream.seekg(pos-1);
 
-                //save the child
+                // save the child
                 stream >> child;
 
-                //check the validity of the node value
+                // check the validity of the node value
                 if(child < n_nodes){
                     this->Ai_dag.push_back(child);
                 }else{
@@ -87,7 +88,8 @@ GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0) {
     // mark end of Ai_dag array
     this->Ap_dag.push_back(Ai_dag.size());
 
-    //work out roots of the graph
+    // work out roots of the graph
+    // they will be necessary in the next phases
     for(unsigned int i = 0; i < this->n_nodes; i++){
         if(!this->incoming_edges[i]){
             this->roots.push_back(i);
@@ -142,12 +144,13 @@ void GraphParallelDFS::convertToDT() {
     // vector of mutexes, one for each node
     vector<mutex> node_mutexes = vector<mutex>(this->n_nodes);
 
+    // copy roots since they will be used again later
     vector<int> Q = this->roots;
+
+    vector<int> P;
 
     // mutex for protecting P
     mutex mP;
-
-    vector<int> P;
 
     // store the list of the parents in the dag for each node except the one in the dt
     this->parents_dag.resize(n_nodes);
@@ -158,14 +161,22 @@ void GraphParallelDFS::convertToDT() {
         P = vector<int>();
         futures.clear();
 
-        // work out iteration to give to the threads
-        int totalSize = Q.size();
+        // get available parallelism in the current architecture to tune the number of generated async
         int nThreads = thread::hardware_concurrency();
-        // check the dimension of the vector
-        if (totalSize < nThreads) {
+
+// work out the number of iterations to give to the threads
+        int totalSize = Q.size();
+
+        // check the total number of iterations
+        // if the number of iterations is lower than the number of threads, the number of threads started will be
+        // equal to the number of iterations. Otherwise use all the available threads
+        if (totalSize < nThreads)
             nThreads = totalSize;
-        }
+
+        // the minimum number of iterations assigned to each thread
         int threadPortion = totalSize / nThreads;
+
+        // the portion assigned to the last thread (will need to take care of the remainder)
         int lastPortion = totalSize - (threadPortion * nThreads);
 
         for (int thIndex = 0; thIndex < nThreads; thIndex++) {
@@ -177,6 +188,7 @@ void GraphParallelDFS::convertToDT() {
                 for (int i = threadPortion * thIndex; i < max; i++) {
 
                     int node = Q[i];
+
                     // iterate over the children of node
                     int first_child = this->Ap_dag[node] + 1;
                     int ending_child = this->Ap_dag[node + 1];
@@ -189,17 +201,13 @@ void GraphParallelDFS::convertToDT() {
                     if (first_child != ending_child)
                         Br.push_back(node);
 
-                    // vector to collect children futures; needed to wait on them
-                    vector<future<void>> child_futures;
-
-                    // create and launch a task for each child of node
-                    for (int i = first_child; i < ending_child; i++) {
-                        int child = this->Ai_dag[i];
+                    for (int j = first_child; j < ending_child; j++) {
+                        int child = this->Ai_dag[j];
 
                         // lock mutex to access shared resources (paths and incoming_edges)
                         node_mutexes[child].lock();
 
-                        // existing path
+                        // best path to child
                         vector<int> Qr = paths[child];
 
                         // update the path in the case in which
@@ -232,10 +240,11 @@ void GraphParallelDFS::convertToDT() {
                     }
                 }
             });
+
             futures.push_back(move(f));
         }
 
-        // run all the tasks and wait for them
+        // wait for all the async
         for(auto& f : futures){
             f.get();
         }
@@ -266,7 +275,7 @@ void GraphParallelDFS::convertToDT() {
                 Ai_dt.push_back(child);
         }
 
-        // skip first iteration
+        // skip first iteration since it operates also on the previously inserted element
         if(i > 0){
             this->outgoing_edges[i-1] = Ap_dt[i] - Ap_dt[i-1] - 1;
 
@@ -281,7 +290,7 @@ void GraphParallelDFS::convertToDT() {
     Ap_dt[this->n_nodes] = Ai_dt.size();
 
     // update of the number of outgoing edges for the last node (since in the previous cycle it is
-    // ignored (we skip the first element))
+    // ignored (we skip the first iteration))
     this->outgoing_edges[this->n_nodes-1] = Ap_dt[n_nodes] - Ap_dt[n_nodes-1] - 1;
     if(!this->outgoing_edges[n_nodes-1]){
         this->leaves.push_back(n_nodes-1);
@@ -301,9 +310,9 @@ void GraphParallelDFS::computePostOrder() {
     // Initialize the post order vector
     this->post_order.resize(this->n_nodes, 0);
 
-    // initialize its value for the roots
-    // this is necessary in case the dag generated many detached dts
-    // in fact, without this, they will count from the same starting post-order and hence
+    // initialize post order value for the roots
+    // this is necessary in case the conversion from dag to dt generates many detached dts
+    // without this, they will count from the same starting post-order and hence
     // share some post-orders, which is wrong, since they are unique by definition
     // this can be solved by initializing their initial post-order with their gamma_tilde,
     // as if all them are children of a common parent
@@ -317,7 +326,7 @@ void GraphParallelDFS::computePostOrder() {
     // Move them for performance reason since they won't be used anymore
     vector<int> Q = move(this->roots);
 
-    //mutex which protect P vector modifications
+    // mutex which protect P vector modifications
     mutex mP;
 
     vector<future<void>> futures;
@@ -330,16 +339,20 @@ void GraphParallelDFS::computePostOrder() {
         // work out iteration to give to the threads
         int totalSize = Q.size();
         int nThreads = thread::hardware_concurrency();
-        // check the dimension of the vector
+
+        // check the total number of iterations
+        // if the number of iterations is lower than the number of threads, the number of threads started will be
+        // equal to the number of iterations. Otherwise use all the available threads
         if (totalSize < nThreads) {
             nThreads = totalSize;
         }
+
         int threadPortion = totalSize / nThreads;
         int lastPortion = totalSize - (threadPortion * nThreads);
 
         for (int thIndex = 0; thIndex < nThreads; thIndex++) {
-            // create and launch a task for each node in Q
-                future<void> f = async([this, &mP, &P, &threadPortion, &nThreads, &Q, &lastPortion, thIndex]() {
+
+            future<void> f = async([this, &mP, &P, &threadPortion, &nThreads, &Q, &lastPortion, thIndex]() {
 
                 // calculate end index on Q: if this is the last thread then it will take care of the remaining portion
                 int max = (thIndex == (nThreads - 1)) ? ((thIndex + 1) * threadPortion + lastPortion) : (threadPortion * (thIndex + 1));
@@ -350,15 +363,12 @@ void GraphParallelDFS::computePostOrder() {
                     int child_start = this->Ap_dt[node] + 1;
                     int child_end = this->Ap_dt[node + 1];
 
-                    // vector which collect the children futures
-                    vector<future<void>> child_futures;
+                    // iterate over the children of the current node
+                    for (int j = child_start; j < child_end; j++) {
+                        int child = this->Ai_dt[j];
 
-                    //iterate over the children of the current node
-                    for (int i = child_start; i < child_end; i++) {
-                        // create and launch task for each child of the node
-                        int child = this->Ai_dt[i];
-
-                        // pre-compute post-order
+                        // accumulate the post order from the roots to the current node
+                        // this corresponds to calculating tau
                         post_order[child] = post + this->gamma_tilde[child];
 
                         // add child in P for the next iteration
@@ -423,21 +433,24 @@ void GraphParallelDFS::computeSubGraphSize(){
         // work out iteration to give to the threads
         int totalSize = Q.size();
         int nThreads = thread::hardware_concurrency();
-        // check the dimension of the vector
-        if (totalSize < nThreads) {
+
+        // check the total number of iterations
+        // if the number of iterations is lower than the number of threads, the number of threads started will be
+        // equal to the number of iterations. Otherwise use all the available threads
+        if (totalSize < nThreads)
             nThreads = totalSize;
-        }
+
         int threadPortion = totalSize / nThreads;
         int lastPortion = totalSize - (threadPortion * nThreads);
 
         for (int thIndex = 0; thIndex < nThreads; thIndex++) {
-            // create and launch a task for each node in Q
             future<void> f = async([this, &mC, &C, &outgoing_edges_atomic, &threadPortion, &lastPortion, &nThreads, &Q, thIndex]() {
 
                 // calculate end index on Q: if this is the last thread then it will take care of the remaining portion
                 int max = (thIndex == (nThreads - 1)) ? ((thIndex + 1) * threadPortion + lastPortion) : (threadPortion * (thIndex + 1));
                 for (int i = threadPortion * thIndex; i < max; i++) {
                     int node = Q[i];
+
                     // differently from the paper here it is not present another loop
                     // this because in the previous phase the DAG was converted to a
                     // directed tree, hence each node will have at most one parent
@@ -459,28 +472,30 @@ void GraphParallelDFS::computeSubGraphSize(){
             futures.push_back(move(f));
         }
 
-        // wait for the tasks
+        // wait for the async
         for(auto& f : futures){
             f.get();
         }
 
         futures.clear();
 
-        // work out iteration to give to the threads
-        nThreads = thread::hardware_concurrency();
         totalSize = C.size();
-        // check the dimension of the vector
-        if (totalSize < nThreads) {
-            nThreads = totalSize;
-        }
 
-        if(nThreads){
+        // work out iteration to give to the threads
+
+        if(totalSize > 0){
+            nThreads = thread::hardware_concurrency();
+            // check the dimension of the vector
+            if (totalSize < nThreads) {
+                nThreads = totalSize;
+            }
+
             threadPortion = totalSize / nThreads;
             lastPortion = totalSize - (threadPortion * nThreads);
-        }
+        } else
+            nThreads = 0;
 
         for (int thIndex = 0; thIndex < nThreads; thIndex++) {
-            // create and launch a task for each node in C
             future<void> f = async([this, &threadPortion, &lastPortion, &nThreads, &C, thIndex]() {
 
                 // calculate end index on Q: if this is the last thread then it will take care of the remaining portion
@@ -491,14 +506,16 @@ void GraphParallelDFS::computeSubGraphSize(){
                     int first_child = Ap_dt[p] + 1;
                     int end_child = Ap_dt[p + 1];
 
-                    // order children of P
-                    // no race condition since each task will operate on a different section of Ai_dt
+                    // sort children of p in order to iterate on them in lexicographical order for computing gamma_tilde value
+                    // no race condition since each async will operate on a different section of Ai_dt
                     sort(this->Ai_dt.begin() + first_child, this->Ai_dt.begin() + end_child);
 
-                    // iterate over children of P
-                    for (int i = first_child; i < end_child; i++) {
-                        int child = Ai_dt[i];
+                    // iterate over children of p
+                    for (int j = first_child; j < end_child; j++) {
+                        int child = Ai_dt[j];
 
+                        // gamma_tilde is calculated accumulating the gamma of the previous children of this parent p,
+                        // stored in gamma[p]
                         this->gamma_tilde[child] = gamma[p];
                         this->gamma[p] += gamma[child];
                     }
@@ -510,7 +527,7 @@ void GraphParallelDFS::computeSubGraphSize(){
             futures.push_back(move(f));
         }
 
-        // run all the tasks and wait for them
+        // wait for all launched async to terminate
         for(auto& f : futures){
             f.get();
         }
@@ -537,16 +554,15 @@ void GraphParallelDFS::computeRanks(){
     // mutex to protect P modifications
     mutex mP;
 
-    // move leaves since they won't be used anymore
     vector<int> Q;
 
-    // initialize vector of atomic variables with the precomputed outgoing_edges
+    // initialize vector of atomic of outgoing edges through Ap of the dag
     // calculate also leaves of the dag
     vector<atomic_int> outgoing(this->n_nodes);
     for(int i=0; i<this->n_nodes; i++){
         int start_child = this->Ap_dag[i] + 1;
         int end_child = this->Ap_dag[i+1];
-
+        
         int n_children = end_child - start_child;
         outgoing[i].store(n_children);
 
@@ -558,21 +574,23 @@ void GraphParallelDFS::computeRanks(){
 
     while(!Q.empty()){
         P = vector<int>();
-
         futures.clear();
 
         // work out iteration to give to the threads
         int totalSize = Q.size();
         int nThreads = thread::hardware_concurrency();
-        // check the dimension of the vector
+
+        // check the total number of iterations
+        // if the number of iterations is lower than the number of threads, the number of threads started will be
+        // equal to the number of iterations. Otherwise use all the available threads
         if (totalSize < nThreads) {
             nThreads = totalSize;
         }
+
         int threadPortion = totalSize / nThreads;
         int lastPortion = totalSize - (threadPortion * nThreads);
 
         for (int thIndex = 0; thIndex < nThreads; thIndex++) {
-            // create and launch a task for each node in Q
             future<void> f = async([this, &outgoing, &mP, &P, &threadPortion, &lastPortion, &nThreads, &Q, thIndex]() {
 
             // calculate end index on Q: if this is the last thread then it will take care of the remaining portion
@@ -594,41 +612,38 @@ void GraphParallelDFS::computeRanks(){
                     int min = INT_MAX;
 
                     // we compute the s_v in this case as the minimum of the s_v of the children
-                    // since they s_v is:
-                    // - equal to e_v in case they are a leaf
-                    // - equal to the mimimum of the s_v of the children otherwise
-                    for (int i = first_child; i < end_child; i++) {
-                        // no parallelization in this cycle: min should be protected in that case
-                        // which would reduce the benefits of the parallelization, considering also that
-                        // the actual parallelizable content of the cycle is almost none
-                        int child = Ai_dag[i];
+                    // since the s_v is:
+                    // - equal to e_v in case the node is a leaf
+                    // - equal to the minimum of the s_v of the children otherwise
+                    for (int j = first_child; j < end_child; j++) {
+                        int child = Ai_dag[j];
 
-                        // once here we visited the children of the node node
+                        // once here the values s_v of the children has been already computed
                         if (this->s_v[child] < min) min = s_v[child];
                     }
 
                     s_v[node] = min;
                 }
 
-                // update the count of the visited outgoing edges for the parentS of the current node
+                // update the count of the visited outgoing edges for the parents of the current node
                 // 1. first consider the parent in the dt
 
                 int parent_dt = this->parents[node];
                 // NOTE: root nodes will never enter this condition
                 if (parent_dt != -1) {
                     int remaining = outgoing[parent_dt].fetch_sub(1);
-                    // check that no more children (of the dt parent) needs to be visited yet
+                    // check that no more children (of the dt parent) need to be visited yet
                     if (remaining == 1) {
                         mP.lock();
                         P.push_back(parent_dt);
                         mP.unlock();
                     }
 
-                    // 2. then consider the parent(s) in the dag except the one from in the dt (already considered)
+                    // 2. then consider the parent(s) in the dag except the one in the dt (already considered)
                     for (int parent : parents_dag[node]) {
                         remaining = outgoing[parent].fetch_sub(1);
 
-                        // check that no more children (of this parent) needs to be visited yet
+                        // check that no more children (of this parent) need to be visited yet
                         if (remaining == 1) {
                             mP.lock();
                             P.push_back(parent);
@@ -641,7 +656,7 @@ void GraphParallelDFS::computeRanks(){
           futures.push_back(move(f));
         }
 
-        // wait for all launched tasks to terminate
+        // wait for all launched async to terminate
         for(auto& f : futures){
             f.get();
         }
