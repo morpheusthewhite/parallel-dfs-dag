@@ -48,7 +48,7 @@ GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0) {
         // read the first node number in the line
         stream >> node;
 
-        if(node >= n_nodes)
+        if(node >= n_nodes || node < 0)
            throw InvalidGraphInputFile("Number of node in the graph not valid");
 
         // save node index (starting position in Ai) in Ap
@@ -68,7 +68,7 @@ GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0) {
                 stream >> child;
 
                 // check the validity of the node value
-                if(child < n_nodes){
+                if(child < n_nodes && child >= 0){
                     this->Ai_dag.push_back(child);
                 }else{
                     throw InvalidGraphInputFile("Out of bound node");
