@@ -10,5 +10,6 @@ find_package(Threads REQUIRED)
 
 include_directories(include)
 
+set(CMAKE_CXX_FLAGS "-O2")
 add_executable(parallel-dfs-dag src/main.cpp src/GraphParallelDFS.cpp)
 target_link_libraries(parallel-dfs-dag Threads::Threads)
