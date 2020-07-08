@@ -198,8 +198,11 @@ void GraphParallelDFS::convertToDT() {
 
                     // check that node has more than 1 child before adding it to the path
                     // otherwise it will never be a decision point for the path selection
-                    if (first_child != ending_child)
+                    if(Br.empty())
                         Br.push_back(node);
+
+                    unsigned long int pathSize = Br.size();
+                    Br.resize(pathSize + 1);
 
                     for (int j = first_child; j < ending_child; j++) {
                         int child = this->Ai_dag[j];
@@ -207,13 +210,13 @@ void GraphParallelDFS::convertToDT() {
                         // lock mutex to access shared resources (paths and incoming_edges)
                         node_mutexes[child].lock();
 
-                        // best path to child
-                        vector<int> Qr = paths[child];
+                        // add to current path the current child
+                        Br[pathSize] = child;
 
                         // update the path in the case in which
                         // - The path is empty, so this is the first time we meet this child
                         // - We found a path Br which is better than the current one
-                        if (Qr.empty() || Br <= Qr) {
+                        if (paths[child].empty() || Br <= paths[child]) {
                             paths[child] = Br;
 
                             // the previous one, if existing, is a parent in the dag which is not present in the dt
