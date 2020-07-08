@@ -57,6 +57,8 @@ GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0) {
         // add the node itself in Ai
         this->Ai_dag.push_back(node);
 
+        // keep track of the first child of the last node
+        int first_child = Ai_dag.size();
         while(stream >> c_buffer && c_buffer != '#'){
             if(isdigit(c_buffer)){
                 int child;
@@ -69,13 +71,17 @@ GraphParallelDFS::GraphParallelDFS(const string &filename) : n_nodes(0) {
 
                 // check the validity of the node value
                 if(child < n_nodes && child >= 0){
-                    this->Ai_dag.push_back(child);
-                }else{
-                    throw InvalidGraphInputFile("Out of bound node");
-                }
 
-                //update incoming nodes
-                this->incoming_edges[child]++;
+                    // add the child to Ai only if it has not been met yet (in case of duplicated edges)
+                    if(find(Ai_dag.begin() + first_child, Ai_dag.end(), child) == Ai_dag.end()){
+                        this->Ai_dag.push_back(child);
+
+                        // update incoming nodes
+                        this->incoming_edges[child]++;
+                    }
+                } else
+                    throw InvalidGraphInputFile("Out of bound node");
+
             }
         }
     }
