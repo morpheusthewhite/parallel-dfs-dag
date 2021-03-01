@@ -36,7 +36,7 @@ For building the project use the provided `CMakeLists.txt`, with the following
 commands
 
 ```shell
-$ mkdir build && cd build && cmake .. && make && cp parallel-dfs-dag .. && cd ..
+$ mkdir -p build && cd build && cmake .. && make && cp parallel-dfs-dag .. && cd ..
 ```
 
 The program receive a file containing the initial dag with the following format
